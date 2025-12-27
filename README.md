@@ -1,7 +1,7 @@
-# 🚀 Go-NetBalancer
+# 🚀 GoBalancer
 **High-Performance Multi-WAN Load Balancer & Router Controller**
 
-Go-NetBalancer es un sistema de orquestación de red escrito en **Go (Golang)** diseñado para convertir cualquier máquina Linux en un router profesional con capacidades de **Multi-WAN (Múltiples proveedores de internet)**.
+GoBalancer es un sistema de orquestación de red escrito en **Go (Golang)** diseñado para convertir cualquier máquina Linux en un router profesional con capacidades de **Multi-WAN (Múltiples proveedores de internet)**.
 
 A diferencia de los scripts de shell tradicionales, Go-NetBalancer actúa como un **Plano de Control (Control Plane)** inteligente: monitorea el estado de las conexiones en tiempo real y manipula el **Kernel de Linux** (Netlink/Iptables) dinámicamente para enrutar el tráfico de la manera más eficiente.
 
