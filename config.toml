@@ -1,0 +1,26 @@
+[general]
+check_interval = "2s"
+algorithm = "weighted_round_robin"
+
+[[interfaces]]
+name = "WAN_eno1"
+iface_name = "eno1"
+gateway = "192.168.24.1"
+interface_ip = "192.168.24.102"
+weight = 5
+monitor_target = "8.8.8.8"
+monitor_port = 53
+failures_to_down = 3
+successes_to_up = 3
+
+[[interfaces]]
+name = "ZeroTier_Backup"
+iface_name = "ztrfydfgcw"
+gateway = "192.168.192.61"
+interface_ip = "192.168.192.239"
+weight = 1
+monitor_target = "1.1.1.1"
+monitor_port = 53
+failures_to_down = 3
+successes_to_up = 3
+

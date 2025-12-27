@@ -1,0 +1,21 @@
+[Unit]
+Description=Go-NetBalancer Pro Service
+Documentation=https://github.com/soyunomas/gobalancer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+Group=root
+ExecStart=/usr/local/bin/gobalancer
+WorkingDirectory=/etc/gobalancer
+
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=3s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+[general]
+check_interval = "2s"
+# Usamos weighted_round_robin para sumar anchos de banda.
+# Si prefieres usar ZeroTier solo si se cae la fibra, cambia a "failover".
+algorithm = "weighted_round_robin"
+
+# --- WAN 1: Tu Conexión Física (Fibra/ADSL) ---
+[[interfaces]]
+name = "ISP_Principal"
+iface_name = "eno1"
+gateway = "192.168.24.1"        # Tu router físico
+interface_ip = "192.168.24.102" # Tu IP local actual
+weight = 3                      # Peso alto: Es tu conexión rápida y de baja latencia
+monitor_target = "8.8.8.8"      # Monitor Google DNS
+failures_to_down = 3
+successes_to_up = 2
+
+# --- WAN 2: ZeroTier (Túnel VPN) ---
+[[interfaces]]
+name = "ZeroTier_Backup"
+iface_name = "ztrfydfgcw"       # Nombre de la interfaz ZT
+gateway = "192.168.192.61"      # La IP del peer remoto que te da salida a internet
+interface_ip = "192.168.192.239"# Tu IP en la red ZeroTier
+weight = 1                      # Peso bajo: Tienes 119ms de latencia, usémosla menos que la fibra
+monitor_target = "1.1.1.1"      # Monitor Cloudflare DNS
+failures_to_down = 3
+successes_to_up = 2
