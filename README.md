@@ -284,21 +284,5 @@ El sistema usa `iptables` con reglas de NAT estándar. Sin embargo, para entorno
 
 ---
 
-## 🏗️ Arquitectura Técnica
-
-```mermaid
-graph TD
-    A[Monitor (Go Routine)] -->|Ping ICMP + TCP| B(Internet WAN 1)
-    A -->|Ping ICMP + TCP| C(Internet WAN 2)
-    A -->|Estado UP/DOWN| D[Routing Engine]
-    D -->|Netlink Syscalls| E[Linux Kernel Routing Table]
-    D -->|Nftables/Iptables| F[NAT Masquerade]
-    G[Traffic LAN] --> E
-    E --> B
-    E --> C
-```
-
----
-
 **Licencia:** MIT  
 **Autor:** Soyunomas
