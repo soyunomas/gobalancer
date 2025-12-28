@@ -23,7 +23,7 @@ GO=go
 # Targets Principales
 # ==============================================================================
 
-.PHONY: all help build build-prod install uninstall run run-wizard clean test deps fmt vet build-linux build-arm64
+.PHONY: all help build build-prod install uninstall run run-wizard clean test deps fmt vet vulncheck build-linux build-arm64
 
 ## help: Muestra esta ayuda
 help:
@@ -133,6 +133,11 @@ vet:
 test:
 	@echo "🧪 Ejecutando tests..."
 	$(GO) test -v ./...
+
+## vulncheck: Escanea vulnerabilidades en dependencias y código (govulncheck)
+vulncheck:
+	@echo "🛡️  Ejecutando análisis de seguridad..."
+	@$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # ==============================================================================
 # Compilación Cruzada (Cross-Compilation)
