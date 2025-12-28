@@ -14,7 +14,7 @@ A diferencia de los scripts de shell tradicionales, GoBalancer actúa como un **
 *   **🧠 Monitor de Salud Inteligente:**
     *   Verificación dual: Ping ICMP + Handshake TCP (Puerto configurable).
     *   **Anti-Flapping (Histéresis):** Evita cambios constantes de ruta por micro-cortes.
-*   **🔌 Modo Router (Gateway):** Activa automáticamente NAT (Masquerade) y IP Forwarding para dar internet a una red LAN.
+*   **🔌 Modo Router (Gateway):** Activa nativamente NAT (Masquerade) y IP Forwarding en todas las interfaces WAN activas.
 *   **🪄 Asistente de Configuración:** Detecta tu hardware automáticamente y genera la configuración por ti.
 *   **🐧 Nativo de Linux:** Usa `netlink` (syscalls) para máximo rendimiento. Cero overhead en el tráfico de datos.
 
@@ -68,8 +68,8 @@ El archivo `config.toml` es el corazón del sistema. A continuación se detallan
 | :--- | :--- | :--- | :--- |
 | **[general]** | `check_interval` | String | Frecuencia de chequeo de salud (ej: `"1s"`, `"500ms"`). |
 | **[general]** | `algorithm` | String | Estrategia de enrutado. <br>• `weighted_round_robin`: Suma velocidades.<br>• `failover`: Usa la 1ª interfaz disponible, el resto en espera. |
-| **[lan]** | `iface_name` | String | **(Opcional)** Nombre de la interfaz de red local (ej: `"eth2"`). Si se define, el sistema actúa como Router/Gateway. |
-| **[lan]** | `enable_dhcp` | Bool | *Experimental.* `false` por defecto (se recomienda usar `dnsmasq` externo). |
+| **[lan]** | `iface_name` | String | *(Informativo)* Nombre de la interfaz LAN. Actualmente el sistema activa forwarding globalmente. |
+| **[lan]** | `enable_dhcp` | Bool | *Futuro.* `false` por defecto (se recomienda usar `dnsmasq` externo). |
 | **[[interfaces]]**| `name` | String | Nombre identificativo (ej: `"Fibra_Movistar"`). |
 | **[[interfaces]]**| `iface_name` | String | Interfaz física de Linux (ej: `"eth0"`, `"wlan0"`). |
 | **[[interfaces]]**| `gateway` | String | IP del Router del ISP (ej: `"192.168.1.1"`). |
@@ -124,9 +124,10 @@ monitor_target = "1.1.1.1"
 check_interval = "1s"
 algorithm = "failover"  # Modo ahorro: Solo usa 4G si la fibra cae
 
-# Definimos la LAN para activar Forwarding y NAT hacia dentro
+# GoBalancer habilita NAT en las WANs.
+# Asegúrate de tener una política de FORWARD permisiva o reglas de firewall externas.
 [lan]
-iface_name = "eth2"
+iface_name = "eth2" # Referencia
 enable_dhcp = false
 
 [[interfaces]]
@@ -175,6 +176,44 @@ interface_ip = "192.168.192.239"# Tu IP dentro del túnel
 weight = 1                      # Prioridad Baja (Mayor latencia)
 monitor_target = "1.1.1.1"      # Monitor Cloudflare
 monitor_port = 53
+```
+
+### Escenario D: Single-NIC Multi-Gateway + ZeroTier
+*Objetivo:* Caso complejo en Datacenter o Red Corporativa. Tienes **una sola interfaz física** (`eth0`) pero tu proveedor te ofrece **dos routers/gateways distintos** en la misma subred (ej: `10.0.0.1` y `10.0.0.2`) para redundancia. Además, tienes una VPN de respaldo.
+
+*Nota: Debes haber asignado previamente las múltiples IPs (Alias) a tu tarjeta de red (ej: `ip addr add 10.0.0.101/24 dev eth0` y `10.0.0.102/24 dev eth0`).*
+
+```toml
+[general]
+check_interval = "1s"
+algorithm = "weighted_round_robin"
+
+# --- Gateway A (ISP Primario Ruta 1) ---
+[[interfaces]]
+name = "ISP_Ruta_A"
+iface_name = "eth0"         # Misma interfaz física
+gateway = "10.0.0.1"        # Primer Router
+interface_ip = "10.0.0.101" # IP Alias 1 (Importante: Distinta para diferenciar tráfico)
+weight = 5
+monitor_target = "8.8.8.8"
+
+# --- Gateway B (ISP Primario Ruta 2) ---
+[[interfaces]]
+name = "ISP_Ruta_B"
+iface_name = "eth0"         # Misma interfaz física
+gateway = "10.0.0.2"        # Segundo Router
+interface_ip = "10.0.0.102" # IP Alias 2
+weight = 5
+monitor_target = "1.1.1.1"  # Monitor distinto recomendado
+
+# --- Respaldo VPN ---
+[[interfaces]]
+name = "Backup_ZeroTier"
+iface_name = "zt7nn23"
+gateway = "192.168.192.1"
+interface_ip = "192.168.192.50"
+weight = 1
+monitor_target = "9.9.9.9"
 ```
 
 ---
@@ -227,6 +266,7 @@ sudo systemctl start gobalancer
 ```bash
 journalctl -u gobalancer -f
 ```
+
 ---
 
 ## ❓ Preguntas Frecuentes (FAQ)
@@ -244,6 +284,19 @@ El sistema usa `iptables` con reglas de NAT estándar. Sin embargo, para entorno
 
 ---
 
+## 🏗️ Arquitectura Técnica
+
+```mermaid
+graph TD
+    A[Monitor (Go Routine)] -->|Ping ICMP + TCP| B(Internet WAN 1)
+    A -->|Ping ICMP + TCP| C(Internet WAN 2)
+    A -->|Estado UP/DOWN| D[Routing Engine]
+    D -->|Netlink Syscalls| E[Linux Kernel Routing Table]
+    D -->|Nftables/Iptables| F[NAT Masquerade]
+    G[Traffic LAN] --> E
+    E --> B
+    E --> C
+```
 
 ---
 
