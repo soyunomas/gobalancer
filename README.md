@@ -3,7 +3,7 @@
 
 GoBalancer es un sistema de orquestación de red escrito en **Go (Golang)** diseñado para convertir cualquier máquina Linux en un router profesional con capacidades de **Multi-WAN (Múltiples proveedores de internet)**.
 
-A diferencia de los scripts de shell tradicionales, Go-NetBalancer actúa como un **Plano de Control (Control Plane)** inteligente: monitorea el estado de las conexiones en tiempo real y manipula el **Kernel de Linux** (Netlink/Iptables) dinámicamente para enrutar el tráfico de la manera más eficiente.
+A diferencia de los scripts de shell tradicionales, GoBalancer actúa como un **Plano de Control (Control Plane)** inteligente: monitorea el estado de las conexiones en tiempo real y manipula el **Kernel de Linux** (Netlink/Iptables) dinámicamente para enrutar el tráfico de la manera más eficiente.
 
 ---
 
@@ -183,7 +183,7 @@ monitor_port = 53
 
 Esta sección es crucial si usas ZeroTier o WireGuard como una de tus WANs (Escenario C).
 
-### 1. Configuración del Servidor Remoto (Exit Node)
+### Configuración del Servidor Remoto (Exit Node)
 Para que tu VPN funcione como salida a internet, debes configurar el **servidor remoto** (el que tiene la IP `192.168.192.61` en el ejemplo) para que haga NAT.
 
 Ejecuta esto en el **Servidor Remoto** (Ubuntu/Debian):
@@ -205,25 +205,7 @@ sudo iptables -I FORWARD 1 -i zt+ -o $WAN_IFACE -j ACCEPT
 sudo iptables -I FORWARD 1 -i $WAN_IFACE -o zt+ -m state --state RELATED,ESTABLISHED -j ACCEPT
 ```
 
-### 2. Solución al problema del "Huevo y la Gallina" (Check Routing)
-
-Si configuras una VPN como WAN, puedes encontrarte con el error `Destination Host Unreachable` en el monitor, incluso si el túnel está levantado.
-
-**El Problema:**
-Go-NetBalancer no añade la ruta por defecto a la VPN porque el monitor da fallo. Pero el monitor da fallo porque el sistema no sabe cómo llegar a la IP de monitoreo (ej: `1.1.1.1`) a través del túnel.
-
-**La Solución:**
-Debes "cebar" la ruta manualmente en tu máquina cliente. Tienes que decirle al Kernel explícitamente cómo llegar al monitor a través del túnel.
-
-```bash
-# Comando Genérico:
-# sudo ip route add <MONITOR_TARGET_IP> via <VPN_GATEWAY_IP> dev <VPN_INTERFACE>
-
-# Ejemplo Real (Basado en Escenario C):
-sudo ip route add 1.1.1.1 via 192.168.192.61 dev ztrfydfgcw
-```
-
-*Ahora el monitor podrá hacer ping a 1.1.1.1, marcará la interfaz como UP, y Go-NetBalancer comenzará a enrutar tráfico por ahí.*
+*Nota: GoBalancer configura automáticamente las rutas locales en el cliente para que el monitoreo funcione correctamente a través del túnel.*
 
 ---
 
@@ -245,21 +227,23 @@ sudo systemctl start gobalancer
 ```bash
 journalctl -u gobalancer -f
 ```
-
 ---
 
 ## ❓ Preguntas Frecuentes (FAQ)
 
-**¿Go-NetBalancer asigna IPs a mis dispositivos (DHCP)?**
-No. Go-NetBalancer se encarga del **enrutamiento crítico y failover**. Para asignar IPs en tu LAN, te recomendamos instalar `dnsmasq` o `isc-dhcp-server` en la misma máquina. Es el estándar de la industria (Unix Philosophy: "Do one thing and do it well").
+**¿GoBalancer asigna IPs a mis dispositivos (DHCP)?**
+No. GoBalancer se encarga del **enrutamiento crítico y failover**. Para asignar IPs en tu LAN, te recomendamos instalar `dnsmasq` o `isc-dhcp-server` en la misma máquina. Es el estándar de la industria (Unix Philosophy: "Do one thing and do it well").
 
 **¿Puedo sumar las velocidades en una sola descarga?**
 Depende.
-*   **BitTorrent / Steam / Gestores de descarga:** **SÍ**. Estos programas abren múltiples conexiones simultáneas, que Go-NetBalancer repartirá entre tus WANs.
+*   **BitTorrent / Steam / Gestores de descarga:** **SÍ**. Estos programas abren múltiples conexiones simultáneas, que GoBalancer repartirá entre tus WANs.
 *   **Descarga de archivo simple en navegador:** **NO**. Una sola conexión TCP (socket) debe ir por una sola ruta física. Sin embargo, el navegador podrá abrir otras conexiones (imágenes, scripts) por la otra línea, agilizando la carga web.
 
 **¿Qué pasa con las webs de bancos (HTTPS)?**
 El sistema usa `iptables` con reglas de NAT estándar. Sin embargo, para entornos críticos, se recomienda configurar "Sticky Sessions" (persistencia) para que un usuario no cambie de IP pública en mitad de una sesión bancaria.
+
+---
+
 
 ---
 
