@@ -11,10 +11,19 @@ import (
 	"github.com/tu-usuario/gobalancer/internal/config"
 )
 
+// StatusEvent es el evento puntual que emite el monitor
 type StatusEvent struct {
 	InterfaceName string
 	IsUp          bool
 	Latency       time.Duration
+}
+
+// InterfaceState representa el estado acumulado de una interfaz (SLA Aware)
+// Exportado para ser usado por el Router
+type InterfaceState struct {
+	IsUp       bool
+	Latency    time.Duration
+	LastUpdate time.Time
 }
 
 type Monitor struct {
@@ -38,7 +47,6 @@ func (m *Monitor) Start(ctx context.Context) {
 
 func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConfig) {
 	// OPT(3, 5): Pre-calculamos el target TCP (String inmutable) FUERA del bucle.
-	// Esto evita llamar a net.JoinHostPort() y crear basura en el Heap cada segundo.
 	tcpTarget := net.JoinHostPort(iface.MonitorTarget, strconv.Itoa(iface.MonitorPort))
 	
 	log.Printf("[MONITOR] Iniciando vigilancia en %s -> ICMP:%s, TCP:%s", iface.Name, iface.MonitorTarget, tcpTarget)
@@ -46,12 +54,10 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 	// OPT(4): Pre-configuramos el Dialer una sola vez.
 	dialer := &net.Dialer{
 		Timeout:   1500 * time.Millisecond,
-		// Importante: Forzamos la salida por la IP de la interfaz específica
 		LocalAddr: &net.TCPAddr{IP: net.ParseIP(iface.InterfaceIP)},
-		KeepAlive: -1, // No necesitamos KeepAlive para un simple handshake check
+		KeepAlive: -1, 
 	}
 
-	// Configurar intervalo
 	intervalDuration, err := time.ParseDuration(m.Cfg.General.CheckInterval)
 	if err != nil {
 		intervalDuration = 2 * time.Second
@@ -59,7 +65,7 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 	ticker := time.NewTicker(intervalDuration)
 	defer ticker.Stop()
 
-	// OPT(3): Variables en Stack para evitar escape analysis
+	// OPT(3): Variables en Stack
 	var (
 		consecutiveFailures int
 		consecutiveSuccesses int
@@ -83,31 +89,33 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 			icmpSuccess, rtt = m.checkICMP(iface)
 
 			// 2. TCP Handshake 
-			// Usamos el string tcpTarget pre-calculado
 			tcpSuccess = m.checkTCP(dialer, tcpTarget)
 
-			// Lógica: Para estar UP, ambos tests deben pasar (ajustable según necesidad)
 			isSuccess := icmpSuccess && tcpSuccess
 			stateChanged := false
+			
+			// Nota: Siempre emitimos latencia si hay éxito, para alimentar el SLA
+			// aunque el estado UP/DOWN no cambie.
+			shouldEmit := false
 
 			if isSuccess {
 				consecutiveFailures = 0
 				consecutiveSuccesses++
 				
-				// Lógica de histéresis (Up)
 				if !isCurrentlyUp && consecutiveSuccesses >= limitUp {
 					isCurrentlyUp = true
 					stateChanged = true
 					log.Printf("[MONITOR] %s RECUPERADO. Latencia: %v", iface.Name, rtt)
-				} else if isCurrentlyUp {
-					// Si ya está arriba, mantenemos actualizada la latencia para métricas futuras
-					// pero no emitimos evento de cambio de estado.
 				}
+				// Si está UP, queremos reportar la latencia fresca para SLA
+				if isCurrentlyUp {
+					shouldEmit = true
+				}
+
 			} else {
 				consecutiveSuccesses = 0
 				consecutiveFailures++
 				
-				// Lógica de histéresis (Down)
 				if isCurrentlyUp && consecutiveFailures >= limitDown {
 					isCurrentlyUp = false
 					stateChanged = true
@@ -115,23 +123,24 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 				}
 			}
 
-			if stateChanged {
+			// Emitimos evento si hubo cambio de estado O si estamos UP (para actualizar latencia)
+			if stateChanged || shouldEmit {
 				m.Updates <- StatusEvent{
 					InterfaceName: iface.Name,
 					IsUp:          isCurrentlyUp,
 					Latency:       rtt,
 				}
-				// Resetear contadores tras cambio de estado para evitar flapping
-				consecutiveFailures = 0
-				consecutiveSuccesses = 0
+				
+				if stateChanged {
+					consecutiveFailures = 0
+					consecutiveSuccesses = 0
+				}
 			}
 		}
 	}
 }
 
 func (m *Monitor) checkICMP(iface config.InterfaceConfig) (bool, time.Duration) {
-	// OPT(2): probing.NewPinger genera allocs, es inevitable con esta librería.
-	// Si quisiéramos optimizar más, usaríamos un socket RAW compartido, pero aumenta complejidad drásticamente.
 	pinger, err := probing.NewPinger(iface.MonitorTarget)
 	if err != nil { return false, 0 }
 	
@@ -139,7 +148,7 @@ func (m *Monitor) checkICMP(iface config.InterfaceConfig) (bool, time.Duration) 
 		pinger.Source = iface.InterfaceIP
 	}
 	
-	// OPT(11): SetPrivileged evita syscalls UDP no privilegiadas que a veces fallan en contenedores
+	// OPT(11): SetPrivileged evita syscalls UDP no privilegiadas
 	pinger.SetPrivileged(true)
 	pinger.Count = 1
 	pinger.Timeout = 1500 * time.Millisecond 
@@ -149,14 +158,11 @@ func (m *Monitor) checkICMP(iface config.InterfaceConfig) (bool, time.Duration) 
 	return (stats.PacketsRecv > 0), stats.AvgRtt
 }
 
-// OPT(9): Pasamos 'address' string por valor. Al ser inmutable y pequeña, es muy eficiente.
 func (m *Monitor) checkTCP(d *net.Dialer, address string) bool {
 	conn, err := d.Dial("tcp", address)
 	if err != nil {
 		return false
 	}
-	// OPT(10): Defer tiene un coste de nanosegundos. En un monitor de red (ms) es despreciable,
-	// pero cerrar explícitamente es técnicamente más rápido.
 	conn.Close()
 	return true
 }

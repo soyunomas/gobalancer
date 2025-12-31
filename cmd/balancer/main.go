@@ -15,9 +15,9 @@ import (
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Println("🚀 Iniciando Go-NetBalancer Pro [CLI Enabled]...")
+	log.Println("🚀 Iniciando Go-NetBalancer Pro [SLA Aware]...")
 
-	// 1. Gestión de argumentos (Archivo de config personalizado)
+	// 1. Gestión de argumentos
 	configPath := ""
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
@@ -41,7 +41,6 @@ func main() {
 	// 5. Contexto para monitores
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 
-	// Helper para iniciar monitores
 	startMonitors := func(c *config.Config, ctx context.Context) {
 		mon := monitor.NewMonitor(c, eventsChan)
 		mon.Start(ctx)
@@ -53,24 +52,33 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	interfaceStatus := make(map[string]bool)
+	// CAMBIO: Almacenamos estado completo (Punteros para evitar copias)
+	interfaceStatus := make(map[string]*monitor.InterfaceState)
 
 	log.Println("✅ Sistema listo. Esperando eventos...")
 
 	for {
 		select {
 		case event := <-eventsChan:
-			currentStatus, known := interfaceStatus[event.InterfaceName]
-			
-			if !known || currentStatus != event.IsUp {
-				stateStr := "DOWN 🔴"
-				if event.IsUp { stateStr = "UP 🟢" }
-				
-				log.Printf("[%s] %s (Latencia: %v)", event.InterfaceName, stateStr, event.Latency)
-				interfaceStatus[event.InterfaceName] = event.IsUp
-				
-				router.UpdateRoutes(interfaceStatus)
+			// Recuperar o crear estado
+			state, exists := interfaceStatus[event.InterfaceName]
+			if !exists {
+				state = &monitor.InterfaceState{}
+				interfaceStatus[event.InterfaceName] = state
 			}
+			
+			// Actualizamos datos
+			state.IsUp = event.IsUp
+			state.Latency = event.Latency
+			state.LastUpdate = time.Now()
+
+			// Logging informativo (Solo si cambia UP/DOWN para no floodear, o debug de SLA)
+			stateStr := "DOWN 🔴"
+			if event.IsUp { stateStr = "UP 🟢" }
+			log.Printf("[EVENT] %s %s (Latencia: %v)", event.InterfaceName, stateStr, event.Latency)
+				
+			// El Router ahora decide si usarla o no basándose en el SLA
+			router.UpdateRoutes(interfaceStatus)
 
 		case sig := <-sigChan:
 			switch sig {
@@ -78,7 +86,6 @@ func main() {
 				log.Println("🔄 Recibida señal SIGHUP: Recargando configuración...")
 				monitorCancel()
 				
-				// Recargamos usando la MISMA ruta con la que iniciamos
 				newCfg := config.LoadConfig(configPath)
 				router.Cfg = newCfg
 				router.EnableNAT() 
@@ -86,8 +93,9 @@ func main() {
 				monitorCtx, monitorCancel = context.WithCancel(context.Background())
 				startMonitors(newCfg, monitorCtx)
 				
-				log.Println("   -> Recalculando rutas...")
-				router.UpdateRoutes(interfaceStatus)
+				// Limpiamos estados antiguos para evitar usar datos obsoletos
+				interfaceStatus = make(map[string]*monitor.InterfaceState)
+				log.Println("   -> Config recargada. Esperando nuevos datos de monitor...")
 
 			case syscall.SIGINT, syscall.SIGTERM:
 				log.Printf("🛑 Apagando por señal %v...", sig)

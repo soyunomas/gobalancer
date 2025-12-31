@@ -12,6 +12,14 @@ type LanConfig struct {
 	EnableDHCP bool   `mapstructure:"enable_dhcp"`
 }
 
+// RoutingRule define una política de tráfico específica
+type RoutingRule struct {
+	Name           string
+	Type           string // "port", "dst_ip", "proto"
+	Value          string // "80", "1.1.1.1", "tcp"
+	TargetInterface string `mapstructure:"target_interface"` // Nombre de la interfaz (ej: "WAN_eno1")
+}
+
 type InterfaceConfig struct {
 	Name           string
 	IfaceName      string `mapstructure:"iface_name"`
@@ -19,9 +27,10 @@ type InterfaceConfig struct {
 	InterfaceIP    string `mapstructure:"interface_ip"`
 	Weight         int
 	MonitorTarget  string `mapstructure:"monitor_target"`
-	MonitorPort    int    `mapstructure:"monitor_port"` // Agregado para soportar configuración del Wizard
+	MonitorPort    int    `mapstructure:"monitor_port"`
 	FailuresToDown int    `mapstructure:"failures_to_down"`
 	SuccessesToUp  int    `mapstructure:"successes_to_up"`
+	MaxLatency     string `mapstructure:"max_latency"`
 }
 
 type Config struct {
@@ -31,6 +40,7 @@ type Config struct {
 	}
 	Lan        LanConfig
 	Interfaces []InterfaceConfig
+	Rules      []RoutingRule // NUEVO: Lista de reglas de enrutado
 }
 
 func LoadConfig(customPath string) *Config {
@@ -55,7 +65,6 @@ func LoadConfig(customPath string) *Config {
 		log.Fatalf("Error decodificando config: %s", err)
 	}
 	
-	// Validar valores por defecto si el TOML es antiguo
 	for i := range cfg.Interfaces {
 		if cfg.Interfaces[i].MonitorPort == 0 {
 			cfg.Interfaces[i].MonitorPort = 53
