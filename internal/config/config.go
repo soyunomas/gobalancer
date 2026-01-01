@@ -1,8 +1,9 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -12,12 +13,12 @@ type LanConfig struct {
 	EnableDHCP bool   `mapstructure:"enable_dhcp"`
 }
 
-// RoutingRule define una política de tráfico específica
 type RoutingRule struct {
-	Name           string
-	Type           string // "port", "dst_ip", "proto"
-	Value          string // "80", "1.1.1.1", "tcp"
-	TargetInterface string `mapstructure:"target_interface"` // Nombre de la interfaz (ej: "WAN_eno1")
+	Name            string
+	Type            string
+	Value           string
+	Protocol        string
+	TargetInterface string `mapstructure:"target_interface"`
 }
 
 type InterfaceConfig struct {
@@ -40,31 +41,42 @@ type Config struct {
 	}
 	Lan        LanConfig
 	Interfaces []InterfaceConfig
-	Rules      []RoutingRule // NUEVO: Lista de reglas de enrutado
+	Rules      []RoutingRule
 }
 
-func LoadConfig(customPath string) *Config {
+// LoadConfig ahora retorna error en lugar de matar el proceso
+func LoadConfig(customPath string) (*Config, error) {
+	// Usamos una instancia nueva de Viper para evitar contaminar el estado global
+	// si la carga falla a mitad de camino.
+	v := viper.New()
+
 	if customPath != "" {
 		if _, err := os.Stat(customPath); os.IsNotExist(err) {
-			log.Fatalf("❌ Error: Config no existe: %s", customPath)
+			return nil, fmt.Errorf("config no existe: %s", customPath)
 		}
-		viper.SetConfigFile(customPath)
+		v.SetConfigFile(customPath)
 	} else {
-		viper.SetConfigName("config") 
-		viper.SetConfigType("toml")
-		viper.AddConfigPath("/etc/gobalancer/")
-		viper.AddConfigPath(".")
+		v.SetConfigName("config")
+		v.SetConfigType("toml")
+		v.AddConfigPath("/etc/gobalancer/")
+		v.AddConfigPath(".")
 	}
 
-	if err := viper.ReadInConfig(); err != nil {
-		log.Fatalf("❌ Error leyendo config: %s", err)
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("error leyendo archivo config: %w", err)
 	}
 
 	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		log.Fatalf("Error decodificando config: %s", err)
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("error decodificando estructura (sintaxis toml): %w", err)
 	}
-	
+
+	// Validaciones Lógicas (Safety Checks)
+	if len(cfg.Interfaces) == 0 {
+		return nil, fmt.Errorf("config inválida: se requiere al menos 1 interfaz")
+	}
+
+	// Normalización y valores por defecto
 	for i := range cfg.Interfaces {
 		if cfg.Interfaces[i].MonitorPort == 0 {
 			cfg.Interfaces[i].MonitorPort = 53
@@ -74,5 +86,12 @@ func LoadConfig(customPath string) *Config {
 		}
 	}
 
-	return &cfg
+	for i := range cfg.Rules {
+		if cfg.Rules[i].Protocol == "" {
+			cfg.Rules[i].Protocol = "tcp"
+		}
+		cfg.Rules[i].Protocol = strings.ToLower(cfg.Rules[i].Protocol)
+	}
+
+	return &cfg, nil
 }

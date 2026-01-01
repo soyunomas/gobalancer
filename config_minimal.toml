@@ -1,0 +1,16 @@
+[general]
+# Se asume algorithm = "weighted_round_robin" y check_interval = "2s"
+
+[[interfaces]]
+name = "Fibra_Principal"
+iface_name = "eno1"
+gateway = "192.168.24.1"
+monitor_target = "8.8.8.8"
+# interface_ip detectada automáticamente
+# weight = 1 por defecto
+
+[[interfaces]]
+name = "VPN"
+iface_name = "ztrfydfgcw"
+gateway = "192.168.192.61"
+monitor_target = "1.1.1.1"

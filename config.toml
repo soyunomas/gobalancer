@@ -8,10 +8,9 @@ algorithm = "weighted_round_robin"
 name = "WAN_eno1"
 iface_name = "eno1"
 gateway = "192.168.24.1"
-interface_ip = "192.168.24.102"
-weight = 5
+weight = 100
 monitor_target = "8.8.8.8"
-monitor_port = 53
+#monitor_port = 53
 failures_to_down = 3
 successes_to_up = 2
 
@@ -20,10 +19,10 @@ name = "ZeroTier_Backup"
 iface_name = "ztrfydfgcw"
 gateway = "192.168.192.61"
 interface_ip = "192.168.192.239"
-weight = 1
+weight = 50
 monitor_target = "1.1.1.1"
 monitor_port = 53
-max_latency = "150ms" # Protegido por SLA
+max_latency = "250ms" # Protegido por SLA
 
 # --- TRAFFIC STEERING (Policy Routing) ---
 # Aquí decides qué tráfico va por dónde, ignorando el balanceador global.

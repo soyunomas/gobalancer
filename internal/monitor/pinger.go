@@ -18,8 +18,7 @@ type StatusEvent struct {
 	Latency       time.Duration
 }
 
-// InterfaceState representa el estado acumulado de una interfaz (SLA Aware)
-// Exportado para ser usado por el Router
+// InterfaceState representa el estado acumulado usado por el Router
 type InterfaceState struct {
 	IsUp       bool
 	Latency    time.Duration
@@ -39,22 +38,18 @@ func NewMonitor(cfg *config.Config, ch chan StatusEvent) *Monitor {
 }
 
 func (m *Monitor) Start(ctx context.Context) {
-	// OPT(7): Una goroutine por interfaz es aceptable y escalable para <100 interfaces
 	for _, iface := range m.Cfg.Interfaces {
 		go m.watchInterface(ctx, iface)
 	}
 }
 
 func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConfig) {
-	// OPT(3, 5): Pre-calculamos el target TCP (String inmutable) FUERA del bucle.
+	// Pre-cálculos para evitar allocs en loop
 	tcpTarget := net.JoinHostPort(iface.MonitorTarget, strconv.Itoa(iface.MonitorPort))
 	
-	log.Printf("[MONITOR] Iniciando vigilancia en %s -> ICMP:%s, TCP:%s", iface.Name, iface.MonitorTarget, tcpTarget)
-
-	// OPT(4): Pre-configuramos el Dialer una sola vez.
 	dialer := &net.Dialer{
 		Timeout:   1500 * time.Millisecond,
-		LocalAddr: &net.TCPAddr{IP: net.ParseIP(iface.InterfaceIP)},
+		LocalAddr: &net.TCPAddr{IP: net.ParseIP(iface.InterfaceIP)}, // Si es vacía, el Kernel decide (auto-detect)
 		KeepAlive: -1, 
 	}
 
@@ -65,7 +60,6 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 	ticker := time.NewTicker(intervalDuration)
 	defer ticker.Stop()
 
-	// OPT(3): Variables en Stack
 	var (
 		consecutiveFailures int
 		consecutiveSuccesses int
@@ -93,9 +87,6 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 
 			isSuccess := icmpSuccess && tcpSuccess
 			stateChanged := false
-			
-			// Nota: Siempre emitimos latencia si hay éxito, para alimentar el SLA
-			// aunque el estado UP/DOWN no cambie.
 			shouldEmit := false
 
 			if isSuccess {
@@ -107,7 +98,6 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 					stateChanged = true
 					log.Printf("[MONITOR] %s RECUPERADO. Latencia: %v", iface.Name, rtt)
 				}
-				// Si está UP, queremos reportar la latencia fresca para SLA
 				if isCurrentlyUp {
 					shouldEmit = true
 				}
@@ -119,11 +109,10 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 				if isCurrentlyUp && consecutiveFailures >= limitDown {
 					isCurrentlyUp = false
 					stateChanged = true
-					log.Printf("[MONITOR] %s CAÍDO (Ping: %v, TCP: %v)", iface.Name, icmpSuccess, tcpSuccess)
+					log.Printf("[MONITOR] %s CAÍDO (Ping:%v, TCP:%v)", iface.Name, icmpSuccess, tcpSuccess)
 				}
 			}
 
-			// Emitimos evento si hubo cambio de estado O si estamos UP (para actualizar latencia)
 			if stateChanged || shouldEmit {
 				m.Updates <- StatusEvent{
 					InterfaceName: iface.Name,
@@ -144,11 +133,12 @@ func (m *Monitor) checkICMP(iface config.InterfaceConfig) (bool, time.Duration) 
 	pinger, err := probing.NewPinger(iface.MonitorTarget)
 	if err != nil { return false, 0 }
 	
+	// Si InterfaceIP está vacío, NO forzamos Source. 
+	// Dejamos que el routing del kernel (que ya configuramos en ConfigureMonitorRoutes) haga el trabajo.
 	if iface.InterfaceIP != "" {
 		pinger.Source = iface.InterfaceIP
 	}
 	
-	// OPT(11): SetPrivileged evita syscalls UDP no privilegiadas
 	pinger.SetPrivileged(true)
 	pinger.Count = 1
 	pinger.Timeout = 1500 * time.Millisecond 

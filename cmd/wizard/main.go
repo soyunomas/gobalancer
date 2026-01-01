@@ -29,20 +29,20 @@ type ConfigInterface struct {
 	Name          string
 	IfaceName     string
 	Gateway       string
-	InterfaceIP   string
+	InterfaceIP   string // Ahora puede ser detectada automáticamente
 	Weight        int
 	MonitorTarget string
 	MonitorPort   int
 	MaxLatency    string // NUEVO: SLA
 	// Metadata interna
 	IsVPN     bool
-	Provider  string 
-	RemoteWan string 
+	Provider  string
+	RemoteWan string
 }
 
 type DetectedLink struct {
 	Name     string
-	IPs      []string
+	IPs      []string // Lista de IPs detectadas para la interfaz
 	Gateway  string
 	IsVPN    bool
 	Provider string
@@ -99,9 +99,26 @@ func main() {
 	for i, link := range detectedLinks {
 		fmt.Printf(ColorCyan+"\n--- Configurando #%d: %s (%s) ---"+ColorReset, i+1, link.Name, link.Provider)
 
-		defaultIP := getFirstIP(link.IPs)
+		defaultIP := ""
+		if len(link.IPs) == 1 {
+			defaultIP = link.IPs[0] // Asumimos la única IP como origen
+		} else if len(link.IPs) > 1 {
+			fmt.Printf("\n   ⚠️  Múltiples IPs detectadas (%s). Debes elegir una.", strings.Join(link.IPs, ", "))
+		} else {
+			fmt.Println("\n   ❌ No se detectó IP para esta interfaz.")
+			continue // Saltar si no hay IP
+		}
 
-		fmt.Printf("\n   📍 Tu IP Local: %s", defaultIP)
+		// Si hay múltiples IPs, pedimos al usuario que elija
+		if len(link.IPs) > 1 {
+			defaultIP = askString(reader, "   > Selecciona la IP a usar como origen", link.IPs[0]) // Primer IP como default en la pregunta
+			if !contains(link.IPs, defaultIP) {
+				fmt.Println(ColorRed + "❌ IP seleccionada no válida." + ColorReset)
+				continue
+			}
+		}
+
+		fmt.Printf("\n   📍 IP de Origen Seleccionada: %s", defaultIP)
 		if link.Gateway != "" {
 			fmt.Printf("\n   🌐 Gateway Detectado: %s", link.Gateway)
 		} else {
@@ -128,7 +145,7 @@ func main() {
 	addMore := askString(reader, "   ¿Deseas añadir una interfaz manualmente? (s/N)", "n")
 	if strings.ToLower(addMore) == "s" {
 		cName := askString(reader, "   > Nombre de la Interfaz (ej: eth0)", "")
-		cIP := askString(reader, "   > Tu IP Local", "")
+		cIP := askString(reader, "   > Tu IP Local (Deja vacío para que el sistema la detecte)", "")
 		cGW := askIP(reader, "   > IP del Gateway", "")
 
 		dummy := DetectedLink{Name: cName, IPs: []string{cIP}, Gateway: cGW}
@@ -208,7 +225,7 @@ func configureLink(r *bufio.Reader, link DetectedLink, defaultIP, algo string) C
 		Name:          name,
 		IfaceName:     link.Name,
 		Gateway:       gw,
-		InterfaceIP:   defaultIP,
+		InterfaceIP:   defaultIP, // Usamos la detectada o la elegida
 		Weight:        weight,
 		MonitorTarget: target,
 		MonitorPort:   port,
@@ -220,7 +237,6 @@ func configureLink(r *bufio.Reader, link DetectedLink, defaultIP, algo string) C
 }
 
 // --- Escáner de Sistema (Netlink) ---
-// (Sin cambios lógicos aquí, código idéntico al anterior)
 func scanSystem() []DetectedLink {
 	links, err := netlink.LinkList()
 	if err != nil {
@@ -234,7 +250,8 @@ func scanSystem() []DetectedLink {
 	for _, l := range links {
 		attrs := l.Attrs()
 
-		if attrs.Flags&net.FlagLoopback != 0 || attrs.Flags&net.FlagUp == 0 {
+		// Filtramos interfaces no activas, loopback o virtuales no deseadas
+		if attrs.Flags&net.FlagLoopback != 0 || attrs.Flags&net.FlagUp == 0 || strings.HasPrefix(attrs.Name, "docker") || strings.HasPrefix(attrs.Name, "veth") {
 			continue
 		}
 
@@ -244,21 +261,26 @@ func scanSystem() []DetectedLink {
 		}
 		var ipList []string
 		for _, a := range addrs {
+			// Ignoramos IPs de link-local (169.254.x.x) si hay otras IPs disponibles
+			if strings.HasPrefix(a.IP.String(), "169.254.") && len(addrs) > 1 {
+				continue
+			}
 			ipList = append(ipList, a.IP.String())
+		}
+		// Si solo quedaron IPs link-local y había más, las descartamos
+		if len(ipList) == 0 && len(addrs) > 0 {
+			continue
 		}
 
 		gateway := ""
 		for _, r := range routes {
 			if r.LinkIndex == attrs.Index {
 				if r.Gw != nil && !r.Gw.IsUnspecified() {
-					if r.Dst == nil {
-						gateway = r.Gw.String()
-						break
-					}
+					// Buscamos la ruta default (Dst == nil) o la ruta para la subred local
 					ones, _ := r.Dst.Mask.Size()
-					if ones == 0 {
+					if r.Dst == nil || ones == 0 {
 						gateway = r.Gw.String()
-						break
+						break // Encontramos la ruta principal para esta interfaz
 					}
 				}
 			}
@@ -279,17 +301,14 @@ func scanSystem() []DetectedLink {
 
 func identifyProvider(name string) (bool, string) {
 	n := strings.ToLower(name)
-	if strings.Contains(n, "zt") {
-		return true, "ZeroTier"
+	if strings.Contains(n, "zt") || strings.Contains(n, "tun") || strings.Contains(n, "tap") { // ZeroTier, OpenVPN, etc.
+		return true, "VPN/Tunnel"
 	}
 	if strings.Contains(n, "tailscale") {
 		return true, "Tailscale"
 	}
 	if strings.Contains(n, "wg") {
 		return true, "WireGuard"
-	}
-	if strings.Contains(n, "tun") || strings.Contains(n, "tap") {
-		return true, "OpenVPN/Tunnel"
 	}
 	if strings.Contains(n, "ppp") {
 		return true, "PPPoE"
@@ -318,19 +337,24 @@ algorithm = "%s"
 `, algo)
 
 	for _, c := range configs {
-		// Preparamos el string de latencia con seguridad
 		latStr := ""
 		if c.MaxLatency != "" {
 			latStr = fmt.Sprintf("max_latency = \"%s\"", c.MaxLatency)
 		} else {
-			latStr = "# max_latency = \"150ms\"" // Comentado por defecto
+			latStr = "# max_latency = \"150ms\""
+		}
+
+		// Solo escribimos interface_ip si fue especificada o si había múltiples IPs y se eligió
+		ipEntry := fmt.Sprintf(`interface_ip = "%s"`, c.InterfaceIP)
+		if c.InterfaceIP == "" {
+			ipEntry = `# interface_ip = "DETECTED_AUTOMATICALLY"`
 		}
 
 		fmt.Fprintf(f, `[[interfaces]]
 name = "%s"
 iface_name = "%s"
 gateway = "%s"
-interface_ip = "%s"
+%s
 weight = %d
 monitor_target = "%s"
 monitor_port = %d
@@ -338,7 +362,7 @@ failures_to_down = 3
 successes_to_up = 3
 %s
 
-`, c.Name, c.IfaceName, c.Gateway, c.InterfaceIP, c.Weight, c.MonitorTarget, c.MonitorPort, latStr)
+`, c.Name, c.IfaceName, c.Gateway, ipEntry, c.Weight, c.MonitorTarget, c.MonitorPort, latStr)
 	}
 	fmt.Println(ColorGreen + "\n✅ Archivo 'config.toml' creado exitosamente." + ColorReset)
 }
@@ -434,4 +458,14 @@ func printHeader() {
  
             WIZARD DE CONFIGURACIÓN
 ` + ColorReset)
+}
+
+// Helper para verificar si un slice contiene un string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

@@ -64,21 +64,27 @@ El archivo `config.toml` es el corazón del sistema. A continuación se detallan
 
 ### Tabla de Parámetros
 
-| Sección | Parámetro | Tipo | Descripción |
-| :--- | :--- | :--- | :--- |
-| **[general]** | `check_interval` | String | Frecuencia de chequeo de salud (ej: `"1s"`, `"500ms"`). |
-| **[general]** | `algorithm` | String | Estrategia de enrutado. <br>• `weighted_round_robin`: Suma velocidades.<br>• `failover`: Usa la 1ª interfaz disponible, el resto en espera. |
-| **[lan]** | `iface_name` | String | *(Informativo)* Nombre de la interfaz LAN. Actualmente el sistema activa forwarding globalmente. |
-| **[lan]** | `enable_dhcp` | Bool | *Futuro.* `false` por defecto (se recomienda usar `dnsmasq` externo). |
-| **[[interfaces]]**| `name` | String | Nombre identificativo (ej: `"Fibra_Movistar"`). |
-| **[[interfaces]]**| `iface_name` | String | Interfaz física de Linux (ej: `"eth0"`, `"wlan0"`). |
-| **[[interfaces]]**| `gateway` | String | IP del Router del ISP (ej: `"192.168.1.1"`). |
-| **[[interfaces]]**| `interface_ip` | String | **Importante.** IP fija de *tu* máquina en esa interfaz. Necesaria para forzar los pings de prueba por esa ruta. |
-| **[[interfaces]]**| `weight` | Int | Peso para balanceo (1-100). Usado solo en `weighted_round_robin`. Mayor número = Más tráfico. |
-| **[[interfaces]]**| `monitor_target` | String | IP pública para comprobar conectividad (ej: `"8.8.8.8"`, `"1.1.1.1"`). |
-| **[[interfaces]]**| `monitor_port` | Int | **(Nuevo)** Puerto TCP para el check (Defecto: 53). Usa 80/443 para webs o 22 para túneles. |
-| **[[interfaces]]**| `failures_to_down`| Int | Número de fallos consecutivos necesarios para marcar la línea como **DOWN**. |
-| **[[interfaces]]**| `successes_to_up` | Int | Número de éxitos consecutivos necesarios para restaurar la línea (**UP**). |
+| Sección | Parámetro | Tipo | Valor por Defecto | Descripción |
+| :--- | :--- | :--- | :--- | :--- |
+| **[general]** | `check_interval` | String | `"2s"` | Frecuencia de chequeo de salud. |
+| **[general]** | `algorithm` | String | `"weighted_round_robin"` | Estrategia (`weighted_round_robin` o `failover`). |
+| **[lan]** | `iface_name` | String | `""` | *(Informativo)* Nombre de la interfaz LAN. |
+| **[lan]** | `enable_dhcp` | Bool | `false` | Activa servidor DHCP interno (no implementado aún). |
+| **[[interfaces]]**| `name` | String | *Requerido* | Nombre identificativo (ej: `"Fibra"`). |
+| **[[interfaces]]**| `iface_name` | String | *Requerido* | Interfaz física de Linux (ej: `"eth0"`). |
+| **[[interfaces]]**| `gateway` | String | *Requerido* | IP del Router del ISP. |
+| **[[interfaces]]**| `interface_ip` | String | `""` (Automático) | IP local para bindear el monitor. Si se omite, se detecta sola. |
+| **[[interfaces]]**| `weight` | Int | `1` | Peso para balanceo (1-100). |
+| **[[interfaces]]**| `monitor_target` | String | `"8.8.8.8"` | IP pública para comprobar conectividad. |
+| **[[interfaces]]**| `monitor_port` | Int | `53` | Puerto TCP para el check (53=DNS, 80=Web). |
+| **[[interfaces]]**| `failures_to_down`| Int | `3` | Fallos consecutivos para marcar **DOWN**. |
+| **[[interfaces]]**| `successes_to_up` | Int | `3` | Éxitos consecutivos para marcar **UP**. |
+| **[[interfaces]]**| `max_latency` | String | `""` (Sin límite) | Latencia máxima permitida (SLA) antes de descartar la ruta (ej: `"150ms"`). |
+| **[[rules]]** | `name` | String | *Requerido* | Nombre de la regla de enrutado. |
+| **[[rules]]** | `type` | String | *Requerido* | Tipo de match (`port`, `dst_ip`, `src_ip`). |
+| **[[rules]]** | `value` | String | *Requerido* | Valor a buscar (`80`, `1.1.1.1`). |
+| **[[rules]]** | `target_interface`| String | *Requerido* | Nombre de la interfaz por donde saldrá el tráfico. |
+| **[[rules]]** | `protocol` | String | `"tcp"` | Protocolo L4 (`tcp`, `udp`, `icmp`). |
 
 ---
 
@@ -99,7 +105,6 @@ algorithm = "weighted_round_robin"
 name = "Cable_Primario"
 iface_name = "eth0"
 gateway = "192.168.1.1"
-interface_ip = "192.168.1.50"
 weight = 3                  # Prefiere el cable
 monitor_target = "8.8.8.8"
 
@@ -107,7 +112,6 @@ monitor_target = "8.8.8.8"
 name = "Wifi_Secundario"
 iface_name = "wlan0"
 gateway = "192.168.0.1"
-interface_ip = "192.168.0.25"
 weight = 2                  # Usa el wifi también
 monitor_target = "1.1.1.1"
 ```
@@ -162,7 +166,6 @@ algorithm = "weighted_round_robin"
 name = "ISP_Principal"
 iface_name = "eno1"
 gateway = "192.168.24.1"        # Router de tu casa/oficina
-interface_ip = "192.168.24.102" # Tu IP local
 weight = 3                      # Prioridad Alta (Fibra)
 monitor_target = "8.8.8.8"
 monitor_port = 53

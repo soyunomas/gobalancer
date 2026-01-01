@@ -13,25 +13,22 @@ import (
 	"github.com/tu-usuario/gobalancer/internal/config"
 	"github.com/tu-usuario/gobalancer/internal/monitor"
 	"github.com/vishvananda/netlink"
-	"golang.org/x/sys/unix" // OPT(13): Usar constantes de sistema para Protocolos
+	"golang.org/x/sys/unix"
 )
 
 const (
-	// BaseTableID es el ID inicial para las tablas dedicadas por interfaz.
 	BaseTableID = 100
-	
-	// RulePriorityBase es la prioridad base para nuestras reglas (ip rule)
 	RulePriorityBase = 10000
 )
 
 type Manager struct {
-	Cfg *config.Config
+	Cfg           *config.Config
 	ifaceTableIDs map[string]int
 }
 
 func NewManager(cfg *config.Config) *Manager {
 	return &Manager{
-		Cfg: cfg,
+		Cfg:           cfg,
 		ifaceTableIDs: make(map[string]int),
 	}
 }
@@ -42,6 +39,8 @@ func (m *Manager) Setup() error {
 	if err != nil {
 		return fmt.Errorf("no se pudo activar ip_forward: %v", err)
 	}
+
+	m.Cleanup()
 
 	if err := m.ConfigureMonitorRoutes(); err != nil {
 		log.Printf("[KERNEL] ⚠️ Advertencia rutas monitor: %v", err)
@@ -56,6 +55,32 @@ func (m *Manager) Setup() error {
 	}
 
 	return nil
+}
+
+func (m *Manager) Cleanup() {
+	log.Println("[CLEANUP] 🧹 Iniciando limpieza de reglas y rutas del Kernel...")
+
+	rules, err := netlink.RuleList(netlink.FAMILY_V4)
+	if err == nil {
+		for _, r := range rules {
+			if r.Priority >= RulePriorityBase && r.Priority < RulePriorityBase+1000 {
+				netlink.RuleDel(&r)
+			}
+		}
+	}
+
+	for i := 0; i < 20; i++ {
+		tableID := BaseTableID + i
+		filter := &netlink.Route{Table: tableID}
+		routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, filter, netlink.RT_FILTER_TABLE)
+		if err != nil {
+			continue
+		}
+		for _, route := range routes {
+			netlink.RouteDel(&route)
+		}
+	}
+	log.Println("[CLEANUP] ✅ Limpieza completada.")
 }
 
 func (m *Manager) InitDedicatedTables() error {
@@ -99,34 +124,33 @@ func (m *Manager) ApplyUserRules() error {
 
 	for _, rule := range m.Cfg.Rules {
 		targetTable, ok := m.ifaceTableIDs[rule.TargetInterface]
-		if !ok {
-			log.Printf("⚠️ Regla '%s' ignora interfaz desconocida: %s", rule.Name, rule.TargetInterface)
-			continue
-		}
+		if !ok { continue }
 
 		r := netlink.NewRule()
 		r.Table = targetTable
 		r.Priority = priority
-		priority++ 
+		priority++
+
+		var ipProto int
+		switch strings.ToLower(rule.Protocol) {
+		case "udp": ipProto = unix.IPPROTO_UDP
+		case "icmp": ipProto = unix.IPPROTO_ICMP
+		case "tcp": ipProto = unix.IPPROTO_TCP
+		default: ipProto = unix.IPPROTO_TCP
+		}
 
 		switch strings.ToLower(rule.Type) {
 		case "port", "dport":
 			port, err := strconv.Atoi(rule.Value)
-			if err != nil {
-				log.Printf("❌ Puerto inválido en regla '%s': %v", rule.Name, rule.Value)
-				continue
-			}
-			
-			// REQUIERE netlink v1.2.0+ (Ejecutar: go get github.com/vishvananda/netlink@latest)
+			if err != nil { continue }
 			r.Dport = netlink.NewRulePortRange(uint16(port), uint16(port))
-			r.IPProto = unix.IPPROTO_TCP // Por defecto TCP. Para UDP se requeriría otro campo en config.
-			
+			r.IPProto = ipProto
 		case "dst_ip", "ip":
 			ip := net.ParseIP(rule.Value)
 			if ip != nil {
 				r.Dst = &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+				if rule.Protocol != "tcp" { r.IPProto = ipProto }
 			}
-		
 		case "src_ip":
 			ip := net.ParseIP(rule.Value)
 			if ip != nil {
@@ -138,8 +162,6 @@ func (m *Manager) ApplyUserRules() error {
 			if !strings.Contains(err.Error(), "file exists") {
 				log.Printf("❌ Error añadiendo regla '%s': %v", rule.Name, err)
 			}
-		} else {
-			log.Printf("✅ Regla '%s': %s=%s -> %s (Table %d)", rule.Name, rule.Type, rule.Value, rule.TargetInterface, targetTable)
 		}
 	}
 	return nil
@@ -149,9 +171,7 @@ func (m *Manager) ConfigureMonitorRoutes() error {
 	log.Println("[ROUTING] Asegurando rutas estáticas para monitores...")
 
 	for _, iface := range m.Cfg.Interfaces {
-		if iface.Gateway == "" || iface.MonitorTarget == "" {
-			continue
-		}
+		if iface.Gateway == "" || iface.MonitorTarget == "" { continue }
 		gwIP := net.ParseIP(iface.Gateway)
 		dstIP := net.ParseIP(iface.MonitorTarget)
 		if gwIP == nil || dstIP == nil { continue }
@@ -167,9 +187,7 @@ func (m *Manager) ConfigureMonitorRoutes() error {
 			Protocol:  4, 
 		}
 
-		if err := netlink.RouteReplace(route); err != nil {
-			log.Printf("[ROUTING] Error ruta monitor %s: %v", iface.Name, err)
-		}
+		netlink.RouteReplace(route)
 	}
 	return nil
 }
@@ -184,10 +202,13 @@ func (m *Manager) EnableNAT() error {
 	processed := make(map[string]bool)
 	for _, iface := range m.Cfg.Interfaces {
 		if processed[iface.IfaceName] { continue }
-		
-		err := ipt.AppendUnique("nat", "POSTROUTING", "-o", iface.IfaceName, "-j", "MASQUERADE")
-		if err != nil {
-			return fmt.Errorf("NAT error %s: %v", iface.IfaceName, err)
+
+		exists, err := ipt.Exists("nat", "POSTROUTING", "-o", iface.IfaceName, "-j", "MASQUERADE")
+		if err != nil { return err }
+		if !exists {
+			if err := ipt.Append("nat", "POSTROUTING", "-o", iface.IfaceName, "-j", "MASQUERADE"); err != nil {
+				return fmt.Errorf("NAT error %s: %v", iface.IfaceName, err)
+			}
 		}
 		processed[iface.IfaceName] = true
 	}
@@ -199,22 +220,19 @@ func (m *Manager) UpdateRoutes(statusMap map[string]*monitor.InterfaceState) {
 	activeNexthops := make([]*netlink.NexthopInfo, 0, len(m.Cfg.Interfaces))
 
 	type candidate struct {
-		gwIP net.IP
+		gwIP      net.IP
 		hopWeight int
-		name string
+		name      string
 	}
-	var candidates []candidate
+	candidates := make([]candidate, 0, len(m.Cfg.Interfaces))
 
 	for _, iface := range m.Cfg.Interfaces {
 		state, ok := statusMap[iface.Name]
 		if !ok || !state.IsUp { continue }
 
-		// SLA Check
 		if iface.MaxLatency != "" {
 			maxLat, err := time.ParseDuration(iface.MaxLatency)
-			if err == nil && maxLat > 0 && state.Latency > maxLat {
-				continue
-			}
+			if err == nil && maxLat > 0 && state.Latency > maxLat { continue }
 		}
 
 		gwIP := net.ParseIP(iface.Gateway)
@@ -222,7 +240,7 @@ func (m *Manager) UpdateRoutes(statusMap map[string]*monitor.InterfaceState) {
 
 		w := iface.Weight - 1
 		if w < 0 { w = 0 }
-		
+
 		candidates = append(candidates, candidate{gwIP: gwIP, hopWeight: w, name: iface.Name})
 	}
 
@@ -231,7 +249,6 @@ func (m *Manager) UpdateRoutes(statusMap map[string]*monitor.InterfaceState) {
 			activeNexthops = append(activeNexthops, &netlink.NexthopInfo{
 				Gw: candidates[0].gwIP, Hops: 0,
 			})
-			log.Printf("[ROUTING] Failover Activo -> %s", candidates[0].name)
 		}
 	} else {
 		for _, c := range candidates {
@@ -248,7 +265,7 @@ func (m *Manager) UpdateRoutes(statusMap map[string]*monitor.InterfaceState) {
 		route.MultiPath = nil
 		route.Gw = activeNexthops[0].Gw
 	} else if len(activeNexthops) == 0 {
-		log.Println("🚨 TODAS LAS RUTAS CAÍDAS.")
+		return // No routes
 	}
 
 	if err := netlink.RouteReplace(route); err != nil {
