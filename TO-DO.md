@@ -7,24 +7,24 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
 ## 🔴 Fase 1: Hardening & Correctitud (Prioridad Inmediata)
 *El objetivo es evitar "comportamientos groseros" del software (dejando basura en el kernel) y soportar tráfico real (UDP).*
 
-- [ ] **Protocol Agnostic PBR (UDP Support):**
-    - [ ] *Problema:* Actualmente `ip rule` con puerto fuerza `IPPROTO_TCP`. VoIP y Gaming (UDP) no funcionan con reglas de puerto.
-    - [ ] *Solución:* Añadir campo `protocol` ("tcp", "udp") en `config.toml` y pasarlo a `netlink.Rule`.
-- [ ] **Graceful Shutdown & Cleanup:**
-    - [ ] *Problema:* Al detener el servicio, las reglas `ip rule` y las tablas de enrutamiento (ID 100+) se quedan "huérfanas" en el Kernel.
-    - [ ] *Solución:* Implementar método `manager.Cleanup()` que se ejecute en `SIGTERM/SIGINT` para borrar reglas creadas por nosotros.
-- [ ] **Config Hot-Reload Atómico:**
-    - [ ] *Problema:* `SIGHUP` recarga la config, pero si la nueva config tiene errores, el servicio podría quedar en un estado inconsistente.
-    - [ ] *Solución:* Validar la nueva configuración en memoria *antes* de aplicarla. Si falla, mantener la anterior y loguear error.
+- [x] **Protocol Agnostic PBR (UDP Support):**
+    - [x] *Problema:* Actualmente `ip rule` con puerto fuerza `IPPROTO_TCP`. VoIP y Gaming (UDP) no funcionan con reglas de puerto.
+    - [x] *Solución:* Añadir campo `protocol` ("tcp", "udp") en `config.toml` y pasarlo a `netlink.Rule`.
+- [x] **Graceful Shutdown & Cleanup:**
+    - [x] *Problema:* Al detener el servicio, las reglas `ip rule` y las tablas de enrutamiento (ID 100+) se quedan "huérfanas" en el Kernel.
+    - [x] *Solución:* Implementar método `manager.Cleanup()` que se ejecute en `SIGTERM/SIGINT` para borrar reglas creadas por nosotros.
+- [x] **Config Hot-Reload Atómico:**
+    - [x] *Problema:* `SIGHUP` recarga la config, pero si la nueva config tiene errores, el servicio podría quedar en un estado inconsistente.
+    - [x] *Solución:* Validar la nueva configuración en memoria *antes* de aplicarla. Si falla, mantener la anterior y loguear error.
 
 ---
 
 ## 🟠 Fase 2: Observabilidad & Operaciones (Corto Plazo)
 *El sistema es una "caja negra". Necesitamos saber qué está pasando sin leer logs crudos.*
 
-- [ ] **Status Dump File (`/run/gobalancer/status.json`):**
-    - [ ] Generar un archivo JSON cada 5 segundos con el estado actual (Interfaces UP/DOWN, Latencia, Reglas activas).
-    - [ ] Permitir a herramientas externas (Zabbix, Scripts, Dashboard web) leer el estado sin sockets complejos.
+- [x] **Status Dump File (`/run/gobalancer/status.json`):**
+    - [x] Generar un archivo JSON cada 5 segundos con el estado actual (Interfaces UP/DOWN, Latencia, Reglas activas).
+    - [x] Permitir a herramientas externas (Zabbix, Scripts, Dashboard web) leer el estado sin sockets complejos.
 - [ ] **CLI de Control (`gobalancer-ctl`):**
     - [ ] Crear un pequeño binario que lea el `status.json` y lo muestre bonito en terminal.
     - [ ] Comandos: `gobalancer-ctl status`, `gobalancer-ctl config-check`.
@@ -53,21 +53,13 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
 
 - [ ] **eBPF Monitoring (XDP):**
     - [ ] Reemplazar el Pinger actual (User Space) por un programa eBPF en el Kernel que cuente paquetes y mida latencia sin context switching.
-- [ ] **Connection Tracking Flushing:**
-    - [ ] Cuando una WAN cae y vuelve, las conexiones establecidas a veces se quedan "pegadas" a la ruta muerta (Blackhole).
-    - [ ] Implementar borrado selectivo de `conntrack` (`conntrack -D -d <IP_WAN_CAIDA>`) al detectar failover.
+- [x] **Connection Tracking Flushing:**
+    - [x] Cuando una WAN cae y vuelve, las conexiones establecidas a veces se quedan "pegadas" a la ruta muerta (Blackhole).
+    - [x] Implementar borrado selectivo de `conntrack` (`conntrack -D -d <IP_WAN_CAIDA>`) al detectar failover.
 
 ---
 
 ## 🐛 Known Bugs / Deuda Técnica
 - [x] **Dependencia Netlink:** Actualizar a v1.3.0+ para soporte de `RulePortRange`. *(Solucionado en build reciente)*.
-- [ ] **Race Conditions:** Revisar si `UpdateRoutes` puede ser llamado concurrentemente por múltiples monitores (Añadir `sync.Mutex` en el `Manager`).
+- [x] **Race Conditions:** Revisar si `UpdateRoutes` puede ser llamado concurrentemente por múltiples monitores. *(Solucionado: Centralizado en loop único en main.go)*.
 
----
-
-### 📝 Resumen para el Desarrollador
-
-**Tu siguiente Sprint debería ser:**
-1.  **UDP Support:** Crítico para que el Traffic Steering sea útil de verdad.
-2.  **Mutex en Routing:** Seguridad básica de concurrencia.
-3.  **Cleanup:** Ser un buen ciudadano del Kernel.
