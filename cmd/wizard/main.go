@@ -29,19 +29,20 @@ type ConfigInterface struct {
 	Name          string
 	IfaceName     string
 	Gateway       string
-	InterfaceIP   string
+	InterfaceIP   string // Ahora puede ser detectada automáticamente
 	Weight        int
 	MonitorTarget string
 	MonitorPort   int
+	MaxLatency    string // NUEVO: SLA
 	// Metadata interna
 	IsVPN     bool
-	Provider  string // "ZeroTier", "Tailscale", "WireGuard", etc.
-	RemoteWan string // Para la guía del servidor
+	Provider  string
+	RemoteWan string
 }
 
 type DetectedLink struct {
 	Name     string
-	IPs      []string
+	IPs      []string // Lista de IPs detectadas para la interfaz
 	Gateway  string
 	IsVPN    bool
 	Provider string
@@ -53,7 +54,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	printHeader()
 
-	// 1. Escaneo Inteligente (Sin Sudo para lectura básica, netlink funciona)
+	// 1. Escaneo Inteligente
 	fmt.Println(ColorYellow + "🔍 Analizando interfaces y tabla de enrutamiento..." + ColorReset)
 	detectedLinks := scanSystem()
 
@@ -77,7 +78,6 @@ func main() {
 			gwStatus = ColorBlue + l.Gateway + ColorReset
 		}
 
-		// OPT(5): Formato limpio en consola
 		fmt.Printf("   %s %-10s [%-10s] IP: %-15s GW: %s\n", icon, l.Name, desc, getFirstIP(l.IPs), gwStatus)
 	}
 	fmt.Println()
@@ -96,14 +96,29 @@ func main() {
 	// 3. Configuración de Interfaces
 	var finalConfigs []ConfigInterface
 
-	// Procesamos las detectadas
 	for i, link := range detectedLinks {
 		fmt.Printf(ColorCyan+"\n--- Configurando #%d: %s (%s) ---"+ColorReset, i+1, link.Name, link.Provider)
 
-		// Si es VPN, sugerimos IP remota
-		defaultIP := getFirstIP(link.IPs)
+		defaultIP := ""
+		if len(link.IPs) == 1 {
+			defaultIP = link.IPs[0] // Asumimos la única IP como origen
+		} else if len(link.IPs) > 1 {
+			fmt.Printf("\n   ⚠️  Múltiples IPs detectadas (%s). Debes elegir una.", strings.Join(link.IPs, ", "))
+		} else {
+			fmt.Println("\n   ❌ No se detectó IP para esta interfaz.")
+			continue // Saltar si no hay IP
+		}
 
-		fmt.Printf("\n   📍 Tu IP Local: %s", defaultIP)
+		// Si hay múltiples IPs, pedimos al usuario que elija
+		if len(link.IPs) > 1 {
+			defaultIP = askString(reader, "   > Selecciona la IP a usar como origen", link.IPs[0]) // Primer IP como default en la pregunta
+			if !contains(link.IPs, defaultIP) {
+				fmt.Println(ColorRed + "❌ IP seleccionada no válida." + ColorReset)
+				continue
+			}
+		}
+
+		fmt.Printf("\n   📍 IP de Origen Seleccionada: %s", defaultIP)
 		if link.Gateway != "" {
 			fmt.Printf("\n   🌐 Gateway Detectado: %s", link.Gateway)
 		} else {
@@ -125,12 +140,12 @@ func main() {
 		finalConfigs = append(finalConfigs, cfg)
 	}
 
-	// Opción manual por si algo escapó al escáner
+	// Opción manual
 	fmt.Println(ColorPurple + "\n--- Opciones Avanzadas ---" + ColorReset)
 	addMore := askString(reader, "   ¿Deseas añadir una interfaz manualmente? (s/N)", "n")
 	if strings.ToLower(addMore) == "s" {
 		cName := askString(reader, "   > Nombre de la Interfaz (ej: eth0)", "")
-		cIP := askString(reader, "   > Tu IP Local", "")
+		cIP := askString(reader, "   > Tu IP Local (Deja vacío para que el sistema la detecte)", "")
 		cGW := askIP(reader, "   > IP del Gateway", "")
 
 		dummy := DetectedLink{Name: cName, IPs: []string{cIP}, Gateway: cGW}
@@ -160,14 +175,12 @@ func configureLink(r *bufio.Reader, link DetectedLink, defaultIP, algo string) C
 	// Gateway
 	gw := link.Gateway
 	if gw == "" {
-		// Si no se detectó gateway, lo pedimos obligatoriamente.
 		prompt := "   > Escribe la IP del Gateway (Router)"
 		if link.IsVPN {
 			prompt = "   > IP del Servidor VPN Remoto (Gateway)"
 		}
 		gw = askIP(r, prompt, "")
 	} else {
-		// Permitimos cambiarlo
 		gw = askString(r, fmt.Sprintf("   > Gateway [%s]", gw), gw)
 	}
 
@@ -183,18 +196,26 @@ func configureLink(r *bufio.Reader, link DetectedLink, defaultIP, algo string) C
 	port := 53
 
 	if link.IsVPN {
-		// Recomendamos usar targets distintos si es posible, aunque el sistema ahora soporta duplicados.
 		target = "1.1.1.1"
 		fmt.Println(ColorYellow + "   ℹ️  Detectada VPN: Configura NAT en tu servidor remoto (ver guía al finalizar)." + ColorReset)
 	}
 
 	target = askString(r, "   > IP a monitorear (Ping)", target)
 
-	// Puerto
 	pStr := askString(r, "   > Puerto TCP Monitor (Enter para 53 DNS)", "53")
 	port, _ = strconv.Atoi(pStr)
 
-	// Extra info para VPN (Server Guide)
+	// NUEVO: SLA Latencia
+	slaPrompt := "   > Max Latencia SLA (ej: 150ms). Enter para sin limite"
+	maxLatency := askString(r, slaPrompt, "")
+	if maxLatency != "" {
+		// Validación simple visual
+		if !strings.Contains(maxLatency, "ms") && !strings.Contains(maxLatency, "s") {
+			maxLatency += "ms" // Asumimos ms si el usuario olvidó la unidad
+		}
+	}
+
+	// Extra info para VPN
 	remoteWan := ""
 	if link.IsVPN {
 		remoteWan = askString(r, "   > (Para la Guía) ¿Nombre de la interfaz WAN en el servidor remoto? (ej: eth0)", "eth0")
@@ -204,10 +225,11 @@ func configureLink(r *bufio.Reader, link DetectedLink, defaultIP, algo string) C
 		Name:          name,
 		IfaceName:     link.Name,
 		Gateway:       gw,
-		InterfaceIP:   defaultIP,
+		InterfaceIP:   defaultIP, // Usamos la detectada o la elegida
 		Weight:        weight,
 		MonitorTarget: target,
 		MonitorPort:   port,
+		MaxLatency:    maxLatency,
 		IsVPN:         link.IsVPN,
 		Provider:      link.Provider,
 		RemoteWan:     remoteWan,
@@ -215,16 +237,12 @@ func configureLink(r *bufio.Reader, link DetectedLink, defaultIP, algo string) C
 }
 
 // --- Escáner de Sistema (Netlink) ---
-
 func scanSystem() []DetectedLink {
-	// 1. Obtener Enlaces
 	links, err := netlink.LinkList()
 	if err != nil {
 		fmt.Println(ColorRed + "Error leyendo interfaces: " + err.Error() + ColorReset)
 		return nil
 	}
-
-	// 2. Obtener Rutas (Para buscar gateways)
 	routes, _ := netlink.RouteList(nil, netlink.FAMILY_V4)
 
 	var results []DetectedLink
@@ -232,42 +250,42 @@ func scanSystem() []DetectedLink {
 	for _, l := range links {
 		attrs := l.Attrs()
 
-		// Filtros: Ignorar Loopback y Down
-		if attrs.Flags&net.FlagLoopback != 0 || attrs.Flags&net.FlagUp == 0 {
+		// Filtramos interfaces no activas, loopback o virtuales no deseadas
+		if attrs.Flags&net.FlagLoopback != 0 || attrs.Flags&net.FlagUp == 0 || strings.HasPrefix(attrs.Name, "docker") || strings.HasPrefix(attrs.Name, "veth") {
 			continue
 		}
 
-		// Obtener IPs
 		addrs, err := netlink.AddrList(l, netlink.FAMILY_V4)
 		if err != nil || len(addrs) == 0 {
 			continue
 		}
 		var ipList []string
 		for _, a := range addrs {
+			// Ignoramos IPs de link-local (169.254.x.x) si hay otras IPs disponibles
+			if strings.HasPrefix(a.IP.String(), "169.254.") && len(addrs) > 1 {
+				continue
+			}
 			ipList = append(ipList, a.IP.String())
 		}
+		// Si solo quedaron IPs link-local y había más, las descartamos
+		if len(ipList) == 0 && len(addrs) > 0 {
+			continue
+		}
 
-		// Detectar Gateway asociado
 		gateway := ""
 		for _, r := range routes {
 			if r.LinkIndex == attrs.Index {
-				// Buscamos ruta por defecto o con gateway explícito
 				if r.Gw != nil && !r.Gw.IsUnspecified() {
-					if r.Dst == nil {
-						gateway = r.Gw.String()
-						break
-					}
-					// Check mask 0.0.0.0/0
+					// Buscamos la ruta default (Dst == nil) o la ruta para la subred local
 					ones, _ := r.Dst.Mask.Size()
-					if ones == 0 {
+					if r.Dst == nil || ones == 0 {
 						gateway = r.Gw.String()
-						break
+						break // Encontramos la ruta principal para esta interfaz
 					}
 				}
 			}
 		}
 
-		// Identificar Proveedor
 		vpn, provider := identifyProvider(attrs.Name)
 
 		results = append(results, DetectedLink{
@@ -283,17 +301,14 @@ func scanSystem() []DetectedLink {
 
 func identifyProvider(name string) (bool, string) {
 	n := strings.ToLower(name)
-	if strings.Contains(n, "zt") {
-		return true, "ZeroTier"
+	if strings.Contains(n, "zt") || strings.Contains(n, "tun") || strings.Contains(n, "tap") { // ZeroTier, OpenVPN, etc.
+		return true, "VPN/Tunnel"
 	}
 	if strings.Contains(n, "tailscale") {
 		return true, "Tailscale"
 	}
 	if strings.Contains(n, "wg") {
 		return true, "WireGuard"
-	}
-	if strings.Contains(n, "tun") || strings.Contains(n, "tap") {
-		return true, "OpenVPN/Tunnel"
 	}
 	if strings.Contains(n, "ppp") {
 		return true, "PPPoE"
@@ -315,7 +330,6 @@ func generateToml(algo string, configs []ConfigInterface) {
 	f, _ := os.Create("config.toml")
 	defer f.Close()
 
-	// OPT(5): Usamos Fprintf para claridad
 	fmt.Fprintf(f, `[general]
 check_interval = "2s"
 algorithm = "%s"
@@ -323,18 +337,32 @@ algorithm = "%s"
 `, algo)
 
 	for _, c := range configs {
+		latStr := ""
+		if c.MaxLatency != "" {
+			latStr = fmt.Sprintf("max_latency = \"%s\"", c.MaxLatency)
+		} else {
+			latStr = "# max_latency = \"150ms\""
+		}
+
+		// Solo escribimos interface_ip si fue especificada o si había múltiples IPs y se eligió
+		ipEntry := fmt.Sprintf(`interface_ip = "%s"`, c.InterfaceIP)
+		if c.InterfaceIP == "" {
+			ipEntry = `# interface_ip = "DETECTED_AUTOMATICALLY"`
+		}
+
 		fmt.Fprintf(f, `[[interfaces]]
 name = "%s"
 iface_name = "%s"
 gateway = "%s"
-interface_ip = "%s"
+%s
 weight = %d
 monitor_target = "%s"
 monitor_port = %d
 failures_to_down = 3
 successes_to_up = 3
+%s
 
-`, c.Name, c.IfaceName, c.Gateway, c.InterfaceIP, c.Weight, c.MonitorTarget, c.MonitorPort)
+`, c.Name, c.IfaceName, c.Gateway, ipEntry, c.Weight, c.MonitorTarget, c.MonitorPort, latStr)
 	}
 	fmt.Println(ColorGreen + "\n✅ Archivo 'config.toml' creado exitosamente." + ColorReset)
 }
@@ -430,4 +458,14 @@ func printHeader() {
  
             WIZARD DE CONFIGURACIÓN
 ` + ColorReset)
+}
+
+// Helper para verificar si un slice contiene un string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

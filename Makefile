@@ -3,8 +3,11 @@
 # ==============================================================================
 BINARY_NAME=gobalancer
 WIZARD_NAME=gobalancer-wizard
+CTL_NAME=gobalancer-ctl
+
 MAIN_PATH=cmd/balancer/main.go
 WIZARD_PATH=cmd/wizard/main.go
+CTL_PATH=cmd/ctl/main.go
 
 BIN_DIR=bin
 SYSTEM_BIN=/usr/local/bin
@@ -23,7 +26,7 @@ GO=go
 # Targets Principales
 # ==============================================================================
 
-.PHONY: all help build build-prod install uninstall run run-wizard clean test deps fmt vet vulncheck build-linux build-arm64
+.PHONY: all help build build-prod install uninstall run run-wizard clean test deps fmt vet vulncheck build-linux
 
 ## help: Muestra esta ayuda
 help:
@@ -41,12 +44,13 @@ deps:
 	$(GO) mod tidy
 	$(GO) mod verify
 
-## build: Compila Core y Wizard para la arquitectura actual (Desarrollo)
+## build: Compila Core, Wizard y CTL para la arquitectura actual (Desarrollo)
 build:
-	@echo "🔨 Compilando $(BINARY_NAME) y $(WIZARD_NAME)..."
+	@echo "🔨 Compilando suite completa..."
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 	$(GO) build -o $(BIN_DIR)/$(WIZARD_NAME) $(WIZARD_PATH)
+	$(GO) build -o $(BIN_DIR)/$(CTL_NAME) $(CTL_PATH)
 	@echo "✅ Build finalizado en $(BIN_DIR)/"
 
 ## build-prod: Compila optimizado para producción (Static, sin debug info)
@@ -55,6 +59,7 @@ build-prod:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 $(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 	CGO_ENABLED=0 $(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(WIZARD_NAME) $(WIZARD_PATH)
+	CGO_ENABLED=0 $(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(CTL_NAME) $(CTL_PATH)
 	@echo "✅ Binarios optimizados listos."
 
 ## install: Instala binarios, configuración y servicio Systemd (Requiere sudo)
@@ -65,6 +70,7 @@ install: build-prod
 	@echo " -> Copiando binarios a $(SYSTEM_BIN)..."
 	@install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(SYSTEM_BIN)/$(BINARY_NAME)
 	@install -m 755 $(BIN_DIR)/$(WIZARD_NAME) $(SYSTEM_BIN)/$(WIZARD_NAME)
+	@install -m 755 $(BIN_DIR)/$(CTL_NAME) $(SYSTEM_BIN)/$(CTL_NAME)
 	
 	@# 2. Configuración
 	@echo " -> Creando directorio $(CONFIG_DIR)..."
@@ -85,8 +91,8 @@ install: build-prod
 	@systemctl enable gobalancer
 	
 	@echo "✅ Instalación completada."
-	@echo "👉 Configurar: $(WIZARD_NAME) (Sin sudo)"
 	@echo "👉 Iniciar:    sudo systemctl start gobalancer"
+	@echo "👉 Estado:     gobalancer-ctl"
 
 ## uninstall: Elimina binarios y servicio del sistema
 uninstall:
@@ -95,6 +101,7 @@ uninstall:
 	@systemctl disable gobalancer || true
 	@rm -f $(SYSTEM_BIN)/$(BINARY_NAME)
 	@rm -f $(SYSTEM_BIN)/$(WIZARD_NAME)
+	@rm -f $(SYSTEM_BIN)/$(CTL_NAME)
 	@rm -f $(SERVICE_DIR)/gobalancer.service
 	@systemctl daemon-reload
 	@echo "✅ Desinstalado (Configuración mantenida en $(CONFIG_DIR))."
@@ -104,7 +111,7 @@ run: build
 	@echo "🚀 Ejecutando Core (Privilegiado)..."
 	sudo ./$(BIN_DIR)/$(BINARY_NAME)
 
-## run-wizard: Ejecuta el Asistente (Usuario normal, solo lectura de red)
+## run-wizard: Ejecuta el Asistente
 run-wizard: build
 	@echo "🧙 Ejecutando Wizard..."
 	./$(BIN_DIR)/$(WIZARD_NAME)
@@ -143,12 +150,7 @@ vulncheck:
 # Compilación Cruzada (Cross-Compilation)
 # ==============================================================================
 
-## build-linux: Compila para Linux AMD64 (Servidores)
+## build-linux: Compila para Linux AMD64
 build-linux:
 	@echo "🐧 Compilando para Linux AMD64..."
 	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_PATH)
-
-## build-arm64: Compila para ARM64 (Raspberry Pi 4 / Routers modernos)
-build-arm64:
-	@echo "🍓 Compilando para ARM64..."
-	GOOS=linux GOARCH=arm64 $(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm64 $(MAIN_PATH)

@@ -1,8 +1,9 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -12,50 +13,76 @@ type LanConfig struct {
 	EnableDHCP bool   `mapstructure:"enable_dhcp"`
 }
 
+type RoutingRule struct {
+	Name            string
+	Type            string
+	Value           string
+	Protocol        string
+	TargetInterface string `mapstructure:"target_interface"`
+}
+
 type InterfaceConfig struct {
 	Name           string
 	IfaceName      string `mapstructure:"iface_name"`
-	Gateway        string
+	Gateway        string // Soporta IP específica o "auto"
 	InterfaceIP    string `mapstructure:"interface_ip"`
 	Weight         int
 	MonitorTarget  string `mapstructure:"monitor_target"`
-	MonitorPort    int    `mapstructure:"monitor_port"` // Agregado para soportar configuración del Wizard
+	MonitorPort    int    `mapstructure:"monitor_port"`
 	FailuresToDown int    `mapstructure:"failures_to_down"`
 	SuccessesToUp  int    `mapstructure:"successes_to_up"`
+	MaxLatency     string `mapstructure:"max_latency"`
 }
 
 type Config struct {
 	General struct {
 		CheckInterval string `mapstructure:"check_interval"`
-		Algorithm     string
+		Algorithm     string `mapstructure:"algorithm"`
+		// NUEVO: Script a ejecutar en cambios de estado
+		OnEventScript string `mapstructure:"on_event_script"`
 	}
 	Lan        LanConfig
 	Interfaces []InterfaceConfig
+	Rules      []RoutingRule
 }
 
-func LoadConfig(customPath string) *Config {
+func LoadConfig(customPath string) (*Config, error) {
+	v := viper.New()
+
 	if customPath != "" {
 		if _, err := os.Stat(customPath); os.IsNotExist(err) {
-			log.Fatalf("❌ Error: Config no existe: %s", customPath)
+			return nil, fmt.Errorf("config no existe: %s", customPath)
 		}
-		viper.SetConfigFile(customPath)
+		v.SetConfigFile(customPath)
 	} else {
-		viper.SetConfigName("config") 
-		viper.SetConfigType("toml")
-		viper.AddConfigPath("/etc/gobalancer/")
-		viper.AddConfigPath(".")
+		v.SetConfigName("config")
+		v.SetConfigType("toml")
+		v.AddConfigPath("/etc/gobalancer/")
+		v.AddConfigPath(".")
 	}
 
-	if err := viper.ReadInConfig(); err != nil {
-		log.Fatalf("❌ Error leyendo config: %s", err)
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("error leyendo archivo config: %w", err)
 	}
 
 	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		log.Fatalf("Error decodificando config: %s", err)
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("error decodificando estructura (sintaxis toml): %w", err)
 	}
-	
-	// Validar valores por defecto si el TOML es antiguo
+
+	// --- FIX: Valores por Defecto ---
+	if cfg.General.Algorithm == "" {
+		cfg.General.Algorithm = "weighted_round_robin"
+	}
+	if cfg.General.CheckInterval == "" {
+		cfg.General.CheckInterval = "2s"
+	}
+
+	// Validaciones Lógicas
+	if len(cfg.Interfaces) == 0 {
+		return nil, fmt.Errorf("config inválida: se requiere al menos 1 interfaz")
+	}
+
 	for i := range cfg.Interfaces {
 		if cfg.Interfaces[i].MonitorPort == 0 {
 			cfg.Interfaces[i].MonitorPort = 53
@@ -63,7 +90,16 @@ func LoadConfig(customPath string) *Config {
 		if cfg.Interfaces[i].Weight < 1 {
 			cfg.Interfaces[i].Weight = 1
 		}
+		// Normalizamos Gateway a minúsculas por si el usuario pone "Auto"
+		cfg.Interfaces[i].Gateway = strings.ToLower(cfg.Interfaces[i].Gateway)
 	}
 
-	return &cfg
+	for i := range cfg.Rules {
+		if cfg.Rules[i].Protocol == "" {
+			cfg.Rules[i].Protocol = "tcp"
+		}
+		cfg.Rules[i].Protocol = strings.ToLower(cfg.Rules[i].Protocol)
+	}
+
+	return &cfg, nil
 }

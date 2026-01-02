@@ -2,25 +2,48 @@
 check_interval = "2s"
 algorithm = "weighted_round_robin"
 
+# --- INTERFACES ---
+
 [[interfaces]]
 name = "WAN_eno1"
 iface_name = "eno1"
 gateway = "192.168.24.1"
-interface_ip = "192.168.24.102"
-weight = 5
+weight = 100
 monitor_target = "8.8.8.8"
-monitor_port = 53
+#monitor_port = 53
 failures_to_down = 3
-successes_to_up = 3
+successes_to_up = 2
 
 [[interfaces]]
 name = "ZeroTier_Backup"
 iface_name = "ztrfydfgcw"
 gateway = "192.168.192.61"
 interface_ip = "192.168.192.239"
-weight = 1
+weight = 50
 monitor_target = "1.1.1.1"
 monitor_port = 53
-failures_to_down = 3
-successes_to_up = 3
+max_latency = "250ms" # Protegido por SLA
 
+# --- TRAFFIC STEERING (Policy Routing) ---
+# Aquí decides qué tráfico va por dónde, ignorando el balanceador global.
+
+# Regla 1: Todo el tráfico hacia un servidor específico (ej: Servidor Corporativo) por VPN
+[[rules]]
+name = "Corp_Server_VPN"
+type = "dst_ip"
+value = "203.0.113.55"
+target_interface = "ZeroTier_Backup"
+
+# Regla 2: SSH (Puerto 22) siempre por la Fibra para evitar lag
+[[rules]]
+name = "SSH_Fast"
+type = "port"  # Asume dport
+value = "22"
+target_interface = "WAN_eno1"
+
+# Regla 3: Un PC específico de la LAN sale siempre por el Backup
+[[rules]]
+name = "PC_Invitado"
+type = "src_ip"
+value = "192.168.1.50"
+target_interface = "ZeroTier_Backup"
