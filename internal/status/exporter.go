@@ -2,13 +2,13 @@ package status
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/tu-usuario/gobalancer/internal/config"
+	"github.com/tu-usuario/gobalancer/internal/logger"
 )
 
 // InterfaceDetail representa el estado combinado (Config + Dinámico) para exportar
@@ -95,7 +95,7 @@ func (e *Exporter) Start(interval time.Duration) {
 	// Asegurar directorio
 	dir := filepath.Dir(e.dumpPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("[STATUS] ❌ Error creando directorio %s: %v", dir, err)
+		logger.Get().Error().Str("dir", dir).Err(err).Msg("Error creando directorio status")
 		return
 	}
 
@@ -139,30 +139,17 @@ func (e *Exporter) dumpToDisk() {
 	// 2. Serialización y Escritura (Lento, sin bloqueo)
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
-		log.Printf("[STATUS] Error marshaling json: %v", err)
+		logger.Get().Error().Err(err).Msg("Error marshaling status json")
 		return
 	}
 
 	// Escritura atómica (temp file + rename) para evitar lecturas parciales
 	tmpPath := e.dumpPath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		log.Printf("[STATUS] Error escribiendo tmp: %v", err)
+		logger.Get().Error().Err(err).Msg("Error escribiendo status tmp")
 		return
 	}
 	if err := os.Rename(tmpPath, e.dumpPath); err != nil {
-		log.Printf("[STATUS] Error rotando archivo: %v", err)
+		logger.Get().Error().Err(err).Msg("Error rotando status file")
 	}
-}
-
-// GetSnapshot permite obtener el estado en memoria (para futuro servidor HTTP)
-func (e *Exporter) GetSnapshot() map[string]InterfaceDetail {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	
-	// Copia defensiva
-	copyMap := make(map[string]InterfaceDetail, len(e.state))
-	for k, v := range e.state {
-		copyMap[k] = v
-	}
-	return copyMap
 }

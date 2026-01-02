@@ -37,17 +37,15 @@ type InterfaceConfig struct {
 type Config struct {
 	General struct {
 		CheckInterval string `mapstructure:"check_interval"`
-		Algorithm     string
+		// AÑADIDO: Tag mapstructure para asegurar que Viper lo encuentra
+		Algorithm     string `mapstructure:"algorithm"`
 	}
 	Lan        LanConfig
 	Interfaces []InterfaceConfig
 	Rules      []RoutingRule
 }
 
-// LoadConfig ahora retorna error en lugar de matar el proceso
 func LoadConfig(customPath string) (*Config, error) {
-	// Usamos una instancia nueva de Viper para evitar contaminar el estado global
-	// si la carga falla a mitad de camino.
 	v := viper.New()
 
 	if customPath != "" {
@@ -71,12 +69,20 @@ func LoadConfig(customPath string) (*Config, error) {
 		return nil, fmt.Errorf("error decodificando estructura (sintaxis toml): %w", err)
 	}
 
-	// Validaciones Lógicas (Safety Checks)
+	// --- FIX: Valores por Defecto (Hardcoded) ---
+	// Si el config.toml tiene la línea comentada, esto debe saltar.
+	if cfg.General.Algorithm == "" {
+		cfg.General.Algorithm = "weighted_round_robin"
+	}
+	if cfg.General.CheckInterval == "" {
+		cfg.General.CheckInterval = "2s"
+	}
+
+	// Validaciones Lógicas
 	if len(cfg.Interfaces) == 0 {
 		return nil, fmt.Errorf("config inválida: se requiere al menos 1 interfaz")
 	}
 
-	// Normalización y valores por defecto
 	for i := range cfg.Interfaces {
 		if cfg.Interfaces[i].MonitorPort == 0 {
 			cfg.Interfaces[i].MonitorPort = 53

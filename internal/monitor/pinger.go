@@ -2,13 +2,15 @@ package monitor
 
 import (
 	"context"
-	"log"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	probing "github.com/prometheus-community/pro-bing"
+	"github.com/rs/zerolog"
 	"github.com/tu-usuario/gobalancer/internal/config"
+	"github.com/tu-usuario/gobalancer/internal/logger"
 )
 
 // StatusEvent es el evento puntual que emite el monitor
@@ -28,63 +30,95 @@ type InterfaceState struct {
 type Monitor struct {
 	Cfg     *config.Config
 	Updates chan StatusEvent
+	log     zerolog.Logger
 }
 
 func NewMonitor(cfg *config.Config, ch chan StatusEvent) *Monitor {
 	return &Monitor{
 		Cfg:     cfg,
 		Updates: ch,
+		log:     logger.Get().With().Str("component", "monitor").Logger(),
 	}
 }
 
 func (m *Monitor) Start(ctx context.Context) {
 	for _, iface := range m.Cfg.Interfaces {
+		m.log.Info().Str("iface", iface.Name).Msg("Iniciando monitor de interfaz")
 		go m.watchInterface(ctx, iface)
 	}
 }
 
 func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConfig) {
-	// Pre-cálculos para evitar allocs en loop
+	// --- FASE 1: Pre-cálculo (Zero Allocation en Loop) ---
+	// Calculamos strings y durations una sola vez fuera del loop caliente
 	tcpTarget := net.JoinHostPort(iface.MonitorTarget, strconv.Itoa(iface.MonitorPort))
 	
-	dialer := &net.Dialer{
-		Timeout:   1500 * time.Millisecond,
-		LocalAddr: &net.TCPAddr{IP: net.ParseIP(iface.InterfaceIP)}, // Si es vacía, el Kernel decide (auto-detect)
-		KeepAlive: -1, 
-	}
-
 	intervalDuration, err := time.ParseDuration(m.Cfg.General.CheckInterval)
 	if err != nil {
 		intervalDuration = 2 * time.Second
 	}
+	
+	// Timeout ajustado: No debe superar el intervalo para evitar solapamiento
+	checkTimeout := 1500 * time.Millisecond
+	if checkTimeout > intervalDuration {
+		checkTimeout = intervalDuration - (100 * time.Millisecond)
+	}
+
+	dialer := &net.Dialer{
+		Timeout:   checkTimeout,
+		LocalAddr: &net.TCPAddr{IP: net.ParseIP(iface.InterfaceIP)},
+		KeepAlive: -1,
+	}
+
 	ticker := time.NewTicker(intervalDuration)
 	defer ticker.Stop()
 
-	var (
-		consecutiveFailures int
-		consecutiveSuccesses int
-		isCurrentlyUp       bool
-		rtt                 time.Duration
-		icmpSuccess         bool
-		tcpSuccess          bool
-	)
-	
+	// Contadores de estado
 	limitDown := iface.FailuresToDown
 	if limitDown < 1 { limitDown = 3 }
 	limitUp := iface.SuccessesToUp
 	if limitUp < 1 { limitUp = 3 }
 
+	var (
+		consecutiveFailures  int
+		consecutiveSuccesses int
+		isCurrentlyUp        bool
+	)
+
+	// Logger contextualizado para esta goroutine (evita allocs de key/value repetidos)
+	monLog := m.log.With().Str("iface", iface.Name).Logger()
+
 	for {
 		select {
 		case <-ctx.Done():
+			monLog.Debug().Msg("Deteniendo monitor")
 			return
 		case <-ticker.C:
-			// 1. Ping ICMP
-			icmpSuccess, rtt = m.checkICMP(iface)
+			// --- FASE 2: Ejecución Paralela (Latency Reduction) ---
+			var (
+				icmpSuccess bool
+				rtt         time.Duration
+				tcpSuccess  bool
+				wg          sync.WaitGroup
+			)
 
-			// 2. TCP Handshake 
-			tcpSuccess = m.checkTCP(dialer, tcpTarget)
+			wg.Add(2)
 
+			// Check 1: ICMP (Goroutine dedicada)
+			go func() {
+				defer wg.Done()
+				icmpSuccess, rtt = m.checkICMP(iface, checkTimeout)
+			}()
+
+			// Check 2: TCP (Goroutine dedicada)
+			go func() {
+				defer wg.Done()
+				tcpSuccess = m.checkTCP(dialer, tcpTarget)
+			}()
+
+			wg.Wait() // Esperamos el máx(ICMP, TCP) en lugar de la suma
+
+			// --- FASE 3: Lógica de Decisión (State Machine) ---
 			isSuccess := icmpSuccess && tcpSuccess
 			stateChanged := false
 			shouldEmit := false
@@ -96,30 +130,45 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 				if !isCurrentlyUp && consecutiveSuccesses >= limitUp {
 					isCurrentlyUp = true
 					stateChanged = true
-					log.Printf("[MONITOR] %s RECUPERADO. Latencia: %v", iface.Name, rtt)
+					monLog.Info().Dur("latency", rtt).Msg("Interfaz RECUPERADA (UP)")
 				}
 				if isCurrentlyUp {
 					shouldEmit = true
 				}
-
 			} else {
 				consecutiveSuccesses = 0
 				consecutiveFailures++
 				
+				// Solo logueamos debug de fallos si no estamos caídos todavía, para diagnosis
+				if isCurrentlyUp {
+					monLog.Debug().
+						Bool("icmp", icmpSuccess).
+						Bool("tcp", tcpSuccess).
+						Int("fails", consecutiveFailures).
+						Msg("Fallo detectado en ciclo")
+				}
+				
 				if isCurrentlyUp && consecutiveFailures >= limitDown {
 					isCurrentlyUp = false
 					stateChanged = true
-					log.Printf("[MONITOR] %s CAÍDO (Ping:%v, TCP:%v)", iface.Name, icmpSuccess, tcpSuccess)
+					monLog.Warn().
+						Bool("icmp", icmpSuccess).
+						Bool("tcp", tcpSuccess).
+						Msg("Interfaz CAÍDA (DOWN)")
 				}
 			}
 
 			if stateChanged || shouldEmit {
-				m.Updates <- StatusEvent{
+				select {
+				case m.Updates <- StatusEvent{
 					InterfaceName: iface.Name,
 					IsUp:          isCurrentlyUp,
 					Latency:       rtt,
+				}:
+				default:
+					monLog.Warn().Msg("Canal de eventos lleno, descartando actualización")
 				}
-				
+
 				if stateChanged {
 					consecutiveFailures = 0
 					consecutiveSuccesses = 0
@@ -129,21 +178,23 @@ func (m *Monitor) watchInterface(ctx context.Context, iface config.InterfaceConf
 	}
 }
 
-func (m *Monitor) checkICMP(iface config.InterfaceConfig) (bool, time.Duration) {
+func (m *Monitor) checkICMP(iface config.InterfaceConfig, timeout time.Duration) (bool, time.Duration) {
 	pinger, err := probing.NewPinger(iface.MonitorTarget)
-	if err != nil { return false, 0 }
+	if err != nil {
+		return false, 0
+	}
 	
-	// Si InterfaceIP está vacío, NO forzamos Source. 
-	// Dejamos que el routing del kernel (que ya configuramos en ConfigureMonitorRoutes) haga el trabajo.
 	if iface.InterfaceIP != "" {
 		pinger.Source = iface.InterfaceIP
 	}
 	
 	pinger.SetPrivileged(true)
 	pinger.Count = 1
-	pinger.Timeout = 1500 * time.Millisecond 
+	pinger.Timeout = timeout
 
-	if err := pinger.Run(); err != nil { return false, 0 }
+	if err := pinger.Run(); err != nil {
+		return false, 0
+	}
 	stats := pinger.Statistics()
 	return (stats.PacketsRecv > 0), stats.AvgRtt
 }

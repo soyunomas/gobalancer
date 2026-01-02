@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/tu-usuario/gobalancer/internal/config"
+	"github.com/tu-usuario/gobalancer/internal/logger"
 	"github.com/tu-usuario/gobalancer/internal/monitor"
 	"github.com/tu-usuario/gobalancer/internal/routing"
 	"github.com/tu-usuario/gobalancer/internal/status"
@@ -17,25 +17,35 @@ import (
 const StatusFilePath = "/var/run/gobalancer/status.json"
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Println("🚀 Iniciando Go-NetBalancer Pro [SLA Aware]...")
+	// 1. Setup Logger Optimizado (Zerolog)
+	// Comprobamos si hay flag debug (simple check de args por ahora)
+	debug := false
+	for _, arg := range os.Args {
+		if arg == "--debug" || arg == "-d" {
+			debug = true
+		}
+	}
+	logger.Setup(debug)
+	log := logger.Get()
+
+	log.Info().Msg("🚀 Iniciando Go-NetBalancer Pro [SLA Aware]")
 
 	configPath := ""
-	if len(os.Args) > 1 {
+	if len(os.Args) > 1 && os.Args[1][0] != '-' {
 		configPath = os.Args[1]
 	}
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("❌ Error Crítico al inicio: %v", err)
+		log.Fatal().Err(err).Msg("Error Crítico al cargar configuración")
 	}
 
 	router := routing.NewManager(cfg)
 	if err := router.Setup(); err != nil {
-		log.Fatalf("Setup Kernel: %v", err)
+		log.Fatal().Err(err).Msg("Fallo en Setup Kernel")
 	}
 	if err := router.EnableNAT(); err != nil {
-		log.Fatalf("NAT: %v", err)
+		log.Fatal().Err(err).Msg("Fallo configurando NAT")
 	}
 	defer router.Cleanup()
 
@@ -56,13 +66,12 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	routingState := make(map[string]*monitor.InterfaceState)
-	// Mapa auxiliar para buscar IP rápidamente por nombre de interfaz (para el Flush)
 	ifaceIPs := make(map[string]string)
 	for _, iface := range cfg.Interfaces {
 		ifaceIPs[iface.Name] = iface.InterfaceIP
 	}
 
-	log.Printf("✅ Sistema listo. Estado disponible en: %s", StatusFilePath)
+	log.Info().Str("status_file", StatusFilePath).Msg("Sistema listo y monitoreando")
 
 	for {
 		select {
@@ -81,31 +90,31 @@ func main() {
 			exporter.Update(event.InterfaceName, event.IsUp, event.Latency)
 
 			if prevState != event.IsUp {
-				stateStr := "DOWN 🔴"
+				logEvent := log.Info().Str("interface", event.InterfaceName).Dur("latency", event.Latency)
+				
 				if event.IsUp {
-					stateStr = "UP 🟢"
+					logEvent.Msg("Estado cambiado a UP 🟢")
 				} else {
-					// CRÍTICO: La interfaz ha caído.
-					// Si tenía IP asignada, limpiamos sus conexiones zombis.
-					// Intentamos obtener la IP del mapa auxiliar o de la config.
+					logEvent.Msg("Estado cambiado a DOWN 🔴 - Iniciando Failover")
+					
+					// CRÍTICO: Flush Conntrack
 					if ip, ok := ifaceIPs[event.InterfaceName]; ok && ip != "" {
-						// Ejecutamos Flush de forma asíncrona para no bloquear el loop de eventos
 						go router.FlushConntrack(ip)
 					}
 				}
-				log.Printf("[EVENT] %s ha cambiado a %s (Latencia: %v)", event.InterfaceName, stateStr, event.Latency)
 			}
 
+			// Actualizar rutas solo si hay cambios relevantes (throttling opcional podría ir aquí)
 			router.UpdateRoutes(routingState)
 
 		case sig := <-sigChan:
 			switch sig {
 			case syscall.SIGHUP:
-				log.Println("🔄 Recargando configuración...")
+				log.Info().Msg("🔄 SIGHUP recibido. Recargando configuración...")
 				
 				newCfg, err := config.LoadConfig(configPath)
 				if err != nil {
-					log.Printf("⚠️  Config inválida: %v. Ignorando.", err)
+					log.Error().Err(err).Msg("Configuración inválida en recarga. Ignorando.")
 					continue
 				}
 
@@ -114,7 +123,9 @@ func main() {
 
 				router.Cfg = newCfg
 				router.Cleanup()
-				router.Setup()
+				if err := router.Setup(); err != nil {
+					log.Error().Err(err).Msg("Error setup router tras reload")
+				}
 				router.EnableNAT()
 
 				exporter = status.NewExporter(newCfg, StatusFilePath)
@@ -129,10 +140,10 @@ func main() {
 				monitorCtx, monitorCancel = context.WithCancel(context.Background())
 				startMonitors(newCfg, monitorCtx)
 				
-				log.Println("✨ Config recargada.")
+				log.Info().Msg("✨ Configuración recargada exitosamente.")
 
 			case syscall.SIGINT, syscall.SIGTERM:
-				log.Printf("🛑 Apagando...")
+				log.Info().Msg("🛑 Señal de apagado recibida.")
 				monitorCancel()
 				exporter.Stop()
 				router.Cleanup()
