@@ -58,10 +58,11 @@ func printStatus() {
 	fmt.Printf("%s🚀 GoBalancer Status%s  Last Update: %s\n", ColorBlue, ColorReset, s.Timestamp.Format("15:04:05"))
 	fmt.Printf("   Algorithm: %s%s%s\n\n", ColorBold, s.Algorithm, ColorReset)
 
-	// Definición de formato de tabla (Anchos fijos)
-	// Interface(20) | Type(10) | Status(10) | Latency(15) | Weight(8) | Gateway(18) | Target(15)
-	headerFmt := "%-20s %-10s %-10s %-15s %-8s %-18s %-15s\n"
-	rowFmt    := "%-20s %-10s %s %s %-8d %-18s %-15s\n" // Status y Latency son %s manuales para meter color
+	// Definición de formato de tabla
+	// Ampliado Gateway a 22 chars para soportar "255.255.255.255 (aut)" = 21 chars
+	// Interface(20) | Type(10) | Status(10) | Latency(15) | Weight(8) | Gateway(22) | Target(15)
+	headerFmt := "%-20s %-10s %-10s %-15s %-8s %-22s %-15s\n"
+	rowFmt    := "%-20s %-10s %s %s %-8d %-22s %-15s\n" // Status y Latency son %s manuales para meter color
 
 	fmt.Printf(headerFmt, "INTERFACE", "TYPE", "STATUS", "LATENCY", "WEIGHT", "GATEWAY", "TARGET")
 	fmt.Printf(headerFmt, "---------", "----", "------", "-------", "------", "-------", "------")
@@ -120,7 +121,7 @@ func printStatus() {
 			finalStatus, 
 			finalLat, 
 			i.Weight, 
-			truncate(i.Gateway, 17), 
+			truncate(i.Gateway, 21), // Ampliado el truncate para Gateway
 			truncate(i.Target, 15),
 		)
 	}
@@ -140,3 +141,4 @@ func truncate(s string, max int) string {
 	}
 	return s
 }
+

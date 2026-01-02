@@ -90,6 +90,17 @@ func (e *Exporter) Update(name string, isUp bool, latency time.Duration) {
 	}
 }
 
+// UpdateGateway permite actualizar la IP del Gateway (ej: resuelta vía DHCP)
+func (e *Exporter) UpdateGateway(name string, gateway string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if val, ok := e.state[name]; ok {
+		val.Gateway = gateway
+		e.state[name] = val
+	}
+}
+
 // Start comienza el ciclo de escritura en disco
 func (e *Exporter) Start(interval time.Duration) {
 	// Asegurar directorio

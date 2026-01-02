@@ -9,17 +9,17 @@ A diferencia de los scripts de shell tradicionales, GoBalancer actúa como un **
 
 ## 🔥 Características Principales
 
-*   **⚡ Balanceo de carga ECMP:** Distribuye el tráfico entre múltiples enlaces (Fibra, 4G, Starlink) mediante *Weighted Round Robin* para aprovechar la capacidad total de la red.
-*   **🛡️ Failover Automático:** Detecta caídas de internet y redirige el tráfico instantáneamente a líneas de respaldo.
-*   **🧠 Monitor de Salud Inteligente:**
-    *   Verificación dual paralela: Ping ICMP + Handshake TCP (Puerto configurable).
-    *   **Anti-Flapping (Histéresis):** Evita cambios constantes de ruta por micro-cortes.
-*   **👁️ Observabilidad en Tiempo Real:** Incluye herramienta CLI (`gobalancer-ctl`) para visualizar estado, latencias y eventos en vivo sin leer logs crudos.
-*   **🚦 Traffic Steering (PBR):** Define reglas avanzadas para enrutar tráfico específico (Juegos, VoIP, IPs corporativas) por interfaces dedicadas, ignorando el balanceo global.
-*   **🔌 Modo Router (Gateway):** Activa nativamente NAT (Masquerade) y IP Forwarding en todas las interfaces WAN activas.
-*   **🧹 Limpieza de Conexiones Zombis:** Ejecuta `conntrack flush` automático al detectar caídas, forzando la recuperación inmediata de flujos bloqueados.
-*   **🪄 Asistente de Configuración:** Detecta tu hardware automáticamente y genera la configuración por ti.
-*   **🐧 Nativo de Linux:** Usa `netlink` (syscalls) con **idempotencia** para máximo rendimiento y mínimo uso de CPU. Cero overhead en el tráfico de datos.
+*   **⚡ Balanceo de Carga ECMP:** Distribuye el tráfico entre múltiples enlaces (Fibra, 4G, Starlink) mediante *Weighted Round Robin* nativo del Kernel (Netlink).
+*   **🛡️ Failover Instantáneo:** Detecta caídas de internet y redirige el tráfico instantáneamente a líneas de respaldo.
+*   **🧠 Monitor de Salud Híbrido:**
+    *   Verificación paralela: **ICMP (Ping)** + **TCP Handshake** simultáneos.
+    *   **Anti-Flapping:** Histéresis configurable para evitar cambios de ruta por micro-cortes.
+*   **📡 Dynamic Gateway Discovery (DHCP):** Soporte para `gateway = "auto"`. Detecta automáticamente la IP del router mediante introspección del Kernel. Ideal para **Starlink**, módems 4G/5G o entornos donde la IP del gateway cambia (DHCP).
+*   **⏱️ SLA Awareness (Calidad de Servicio):** Define umbrales de latencia máxima (ej: `max_latency = "150ms"`). Si una línea tiene conexión pero es demasiado lenta, se descarta automáticamente.
+*   **🔔 Sistema de Notificaciones (Hooks):** Ejecuta scripts personalizados (`.sh`, Python, etc.) cuando una interfaz cambia de estado (UP/DOWN/FAILOVER), permitiendo integración con Telegram, Slack, Email o logs externos.
+*   **👁️ Observabilidad Total:** Herramienta CLI (`gobalancer-ctl`) para visualizar estado, latencias en tiempo real y configuración de enrutamiento.
+*   **🚦 Traffic Steering (PBR):** Reglas avanzadas para enrutar tráfico específico (Puertos, IPs origen/destino, Protocolos TCP/UDP) por interfaces dedicadas.
+*   **🧹 Limpieza de Conexiones (Conntrack):** Purga automática de flujos "zombis" al detectar caídas, forzando a las aplicaciones a reconectar inmediatamente por la línea sana.
 
 ---
 
@@ -63,7 +63,7 @@ El asistente detectará tus IPs, Gateways y generará el archivo `config.toml` a
 
 ## ⚙️ Guía de Configuración Manual (`config.toml`)
 
-El archivo `config.toml` es el corazón del sistema. A continuación se detallan todos los parámetros disponibles.
+El archivo `config.toml` controla la lógica del balanceador. A continuación se detallan todos los parámetros disponibles.
 
 ### Tabla de Parámetros
 
@@ -71,25 +71,68 @@ El archivo `config.toml` es el corazón del sistema. A continuación se detallan
 | :--- | :--- | :--- | :--- | :--- |
 | **[general]** | `check_interval` | String | `"2s"` | Frecuencia de chequeo de salud. |
 | **[general]** | `algorithm` | String | `"weighted_round_robin"` | Estrategia (`weighted_round_robin` o `failover`). |
-| **[lan]** | `iface_name` | String | `""` | *(Informativo)* Nombre de la interfaz LAN. |
-| **[lan]** | `enable_dhcp` | Bool | `false` | Activa servidor DHCP interno (no implementado aún). |
+| **[general]** | `on_event_script` | String | `""` (Desactivado) | Ruta absoluta a un script para ejecutar en cambios de estado. |
+| **[lan]** | `iface_name` | String | `""` | *(Opcional)* Nombre de la interfaz LAN. |
 | **[[interfaces]]**| `name` | String | *Requerido* | Nombre identificativo (ej: `"Fibra"`). |
 | **[[interfaces]]**| `iface_name` | String | *Requerido* | Interfaz física de Linux (ej: `"eth0"`). |
-| **[[interfaces]]**| `gateway` | String | *Requerido* | IP del Router del ISP. |
-| **[[interfaces]]**| `interface_ip` | String | `""` (Automático) | IP local para bindear el monitor. Si se omite, se detecta sola. |
+| **[[interfaces]]**| `gateway` | String | *Requerido* | IP del Router o `"auto"` para detección vía DHCP. |
+| **[[interfaces]]**| `interface_ip` | String | `""` (Automático) | IP local para bindear el monitor. Se detecta sola si se omite. |
 | **[[interfaces]]**| `weight` | Int | `1` | Peso para balanceo (1-100). |
 | **[[interfaces]]**| `monitor_target` | String | `"8.8.8.8"` | IP pública para comprobar conectividad. |
 | **[[interfaces]]**| `monitor_port` | Int | `53` | Puerto TCP para el check (53=DNS, 80=Web). |
 | **[[interfaces]]**| `failures_to_down`| Int | `3` | Fallos consecutivos para marcar **DOWN**. |
 | **[[interfaces]]**| `successes_to_up` | Int | `3` | Éxitos consecutivos para marcar **UP**. |
-| **[[interfaces]]**| `max_latency` | String | `""` (Sin límite) | Latencia máxima permitida (SLA) antes de descartar la ruta (ej: `"150ms"`). |
+| **[[interfaces]]**| `max_latency` | String | `""` (Sin límite) | SLA: Desactiva la ruta si la latencia supera este valor (ej: `"150ms"`). |
 | **[[rules]]** | `name` | String | *Requerido* | Nombre de la regla de enrutado. |
 | **[[rules]]** | `type` | String | *Requerido* | Tipo de match (`port`, `dst_ip`, `src_ip`). |
 | **[[rules]]** | `value` | String | *Requerido* | Valor a buscar (`80`, `1.1.1.1`). |
-| **[[rules]]** | `target_interface`| String | *Requerido* | Nombre de la interfaz por donde saldrá el tráfico. |
+| **[[rules]]** | `target_interface`| String | *Requerido* | Nombre de la interfaz de salida. |
 | **[[rules]]** | `protocol` | String | `"tcp"` | Protocolo L4 (`tcp`, `udp`, `icmp`). |
 
----
+### Ejemplo de Configuración
+
+Este ejemplo muestra el uso de **Gateway Dinámico**, **SLA de Latencia** y **Scripts de Alerta**.
+
+```toml
+[general]
+check_interval = "2s"
+algorithm = "weighted_round_robin"
+on_event_script = "/usr/local/bin/notify_admin.sh"  # Hook de notificación
+
+# --- WAN 1: Starlink (IP Dinámica / DHCP) ---
+[[interfaces]]
+name = "Starlink_Dish"
+iface_name = "eth0"
+gateway = "auto"            # <--- DETECCIÓN AUTOMÁTICA
+weight = 5
+monitor_target = "1.1.1.1"
+max_latency = "100ms"       # <--- SLA: Si sube de 100ms, se considera caída
+
+# --- WAN 2: 4G Backup (Estática) ---
+[[interfaces]]
+name = "LTE_Backup"
+iface_name = "eth1"
+gateway = "192.168.8.1"
+weight = 1
+monitor_target = "8.8.8.8"
+failures_to_down = 2
+```
+
+### 🔔 Variables de Entorno para Scripts (`on_event_script`)
+
+Cuando configuras un script en `on_event_script`, GoBalancer inyecta las siguientes variables de entorno para que puedas usarlas en tu lógica (Bash, Python, etc.):
+
+*   `GOBALANCER_IFACE`: Nombre de la interfaz (ej: `Starlink_Dish`).
+*   `GOBALANCER_STATUS`: Nuevo estado (`UP` o `DOWN`).
+*   `GOBALANCER_EVENT_TYPE`: Tipo de evento (`FAILOVER` o `RECOVERY`).
+*   `GOBALANCER_LATENCY`: Latencia medida en ese momento (ej: `35.2ms`).
+
+**Ejemplo simple (`notify.sh`):**
+```bash
+#!/bin/bash
+MSG="Alerta: La interfaz $GOBALANCER_IFACE está $GOBALANCER_STATUS (Latencia: $GOBALANCER_LATENCY)"
+curl -X POST -d "text=$MSG" https://api.telegram.org/botTOKEN/sendMessage...
+```
 
 ## 💡 Escenarios de Uso
 

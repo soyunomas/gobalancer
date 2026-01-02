@@ -24,7 +24,7 @@ type RoutingRule struct {
 type InterfaceConfig struct {
 	Name           string
 	IfaceName      string `mapstructure:"iface_name"`
-	Gateway        string
+	Gateway        string // Soporta IP específica o "auto"
 	InterfaceIP    string `mapstructure:"interface_ip"`
 	Weight         int
 	MonitorTarget  string `mapstructure:"monitor_target"`
@@ -37,8 +37,9 @@ type InterfaceConfig struct {
 type Config struct {
 	General struct {
 		CheckInterval string `mapstructure:"check_interval"`
-		// AÑADIDO: Tag mapstructure para asegurar que Viper lo encuentra
 		Algorithm     string `mapstructure:"algorithm"`
+		// NUEVO: Script a ejecutar en cambios de estado
+		OnEventScript string `mapstructure:"on_event_script"`
 	}
 	Lan        LanConfig
 	Interfaces []InterfaceConfig
@@ -69,8 +70,7 @@ func LoadConfig(customPath string) (*Config, error) {
 		return nil, fmt.Errorf("error decodificando estructura (sintaxis toml): %w", err)
 	}
 
-	// --- FIX: Valores por Defecto (Hardcoded) ---
-	// Si el config.toml tiene la línea comentada, esto debe saltar.
+	// --- FIX: Valores por Defecto ---
 	if cfg.General.Algorithm == "" {
 		cfg.General.Algorithm = "weighted_round_robin"
 	}
@@ -90,6 +90,8 @@ func LoadConfig(customPath string) (*Config, error) {
 		if cfg.Interfaces[i].Weight < 1 {
 			cfg.Interfaces[i].Weight = 1
 		}
+		// Normalizamos Gateway a minúsculas por si el usuario pone "Auto"
+		cfg.Interfaces[i].Gateway = strings.ToLower(cfg.Interfaces[i].Gateway)
 	}
 
 	for i := range cfg.Rules {

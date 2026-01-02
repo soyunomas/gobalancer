@@ -4,7 +4,7 @@
 [[interfaces]]
 name = "Fibra_Principal"
 iface_name = "eno1"
-gateway = "192.168.24.1"
+gateway = "auto"
 monitor_target = "8.8.8.8"
 # interface_ip detectada automáticamente
 # weight = 1 por defecto
