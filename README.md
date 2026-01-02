@@ -12,11 +12,14 @@ A diferencia de los scripts de shell tradicionales, GoBalancer actúa como un **
 *   **⚡ Balanceo de carga ECMP:** Distribuye el tráfico entre múltiples enlaces (Fibra, 4G, Starlink) mediante *Weighted Round Robin* para aprovechar la capacidad total de la red.
 *   **🛡️ Failover Automático:** Detecta caídas de internet y redirige el tráfico instantáneamente a líneas de respaldo.
 *   **🧠 Monitor de Salud Inteligente:**
-    *   Verificación dual: Ping ICMP + Handshake TCP (Puerto configurable).
+    *   Verificación dual paralela: Ping ICMP + Handshake TCP (Puerto configurable).
     *   **Anti-Flapping (Histéresis):** Evita cambios constantes de ruta por micro-cortes.
+*   **👁️ Observabilidad en Tiempo Real:** Incluye herramienta CLI (`gobalancer-ctl`) para visualizar estado, latencias y eventos en vivo sin leer logs crudos.
+*   **🚦 Traffic Steering (PBR):** Define reglas avanzadas para enrutar tráfico específico (Juegos, VoIP, IPs corporativas) por interfaces dedicadas, ignorando el balanceo global.
 *   **🔌 Modo Router (Gateway):** Activa nativamente NAT (Masquerade) y IP Forwarding en todas las interfaces WAN activas.
+*   **🧹 Limpieza de Conexiones Zombis:** Ejecuta `conntrack flush` automático al detectar caídas, forzando la recuperación inmediata de flujos bloqueados.
 *   **🪄 Asistente de Configuración:** Detecta tu hardware automáticamente y genera la configuración por ti.
-*   **🐧 Nativo de Linux:** Usa `netlink` (syscalls) para máximo rendimiento. Cero overhead en el tráfico de datos.
+*   **🐧 Nativo de Linux:** Usa `netlink` (syscalls) con **idempotencia** para máximo rendimiento y mínimo uso de CPU. Cero overhead en el tráfico de datos.
 
 ---
 
