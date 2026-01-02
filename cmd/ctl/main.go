@@ -59,13 +59,13 @@ func printStatus() {
 	fmt.Printf("   Algorithm: %s%s%s\n\n", ColorBold, s.Algorithm, ColorReset)
 
 	// Definición de formato de tabla
-	// Ampliado Gateway a 22 chars para soportar "255.255.255.255 (aut)" = 21 chars
-	// Interface(20) | Type(10) | Status(10) | Latency(15) | Weight(8) | Gateway(22) | Target(15)
-	headerFmt := "%-20s %-10s %-10s %-15s %-8s %-22s %-15s\n"
-	rowFmt    := "%-20s %-10s %s %s %-8d %-22s %-15s\n" // Status y Latency son %s manuales para meter color
+	// Se ha añadido la columna PHYSICAL (ancho 10)
+	// INTERFACE(18) | PHYSICAL(10) | TYPE(10) | STATUS(10) | LATENCY(15) | WEIGHT(8) | GATEWAY(22) | TARGET(15)
+	headerFmt := "%-18s %-10s %-10s %-10s %-15s %-8s %-22s %-15s\n"
+	rowFmt    := "%-18s %-10s %-10s %s %s %-8d %-22s %-15s\n" // Status y Latency son %s manuales para meter color
 
-	fmt.Printf(headerFmt, "INTERFACE", "TYPE", "STATUS", "LATENCY", "WEIGHT", "GATEWAY", "TARGET")
-	fmt.Printf(headerFmt, "---------", "----", "------", "-------", "------", "-------", "------")
+	fmt.Printf(headerFmt, "INTERFACE", "PHYSICAL", "TYPE", "STATUS", "LATENCY", "WEIGHT", "GATEWAY", "TARGET")
+	fmt.Printf(headerFmt, "---------", "--------", "----", "------", "-------", "------", "-------", "------")
 
 	// Sorting
 	type row struct {
@@ -116,12 +116,13 @@ func printStatus() {
 		finalLat := latColor + paddedLat + ColorReset
 
 		fmt.Printf(rowFmt, 
-			truncate(i.Name, 19), 
+			truncate(i.Name, 17), 
+			truncate(i.PhysicalIface, 9), // <--- DATO FÍSICO (eth0, etc)
 			truncate(i.Type, 9), 
 			finalStatus, 
 			finalLat, 
 			i.Weight, 
-			truncate(i.Gateway, 21), // Ampliado el truncate para Gateway
+			truncate(i.Gateway, 21),
 			truncate(i.Target, 15),
 		)
 	}
@@ -141,4 +142,3 @@ func truncate(s string, max int) string {
 	}
 	return s
 }
-

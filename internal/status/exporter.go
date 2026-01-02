@@ -14,7 +14,8 @@ import (
 // InterfaceDetail representa el estado combinado (Config + Dinámico) para exportar
 type InterfaceDetail struct {
 	Name          string        `json:"name"`
-	Type          string        `json:"type"` // "ethernet", "vpn", etc
+	PhysicalIface string        `json:"iface_name"`    // <--- NUEVO CAMPO
+	Type          string        `json:"type"`          // "ethernet", "vpn", etc
 	Gateway       string        `json:"gateway"`
 	IsUp          bool          `json:"is_up"`
 	Latency       string        `json:"latency"`       // Human readable "15ms"
@@ -51,14 +52,15 @@ func NewExporter(cfg *config.Config, path string) *Exporter {
 		if iface.FailuresToDown > 5 { tipo = "backup" }
 		
 		initialState[iface.Name] = InterfaceDetail{
-			Name:       iface.Name,
-			Type:       tipo,
-			Gateway:    iface.Gateway,
-			Weight:     iface.Weight,
-			Target:     iface.MonitorTarget,
-			IsUp:       false, // Asumimos down hasta primer ping
-			Latency:    "N/A",
-			LastChange: time.Now(),
+			Name:          iface.Name,
+			PhysicalIface: iface.IfaceName, // <--- ASIGNACIÓN NUEVO CAMPO
+			Type:          tipo,
+			Gateway:       iface.Gateway,
+			Weight:        iface.Weight,
+			Target:        iface.MonitorTarget,
+			IsUp:          false, // Asumimos down hasta primer ping
+			Latency:       "N/A",
+			LastChange:    time.Now(),
 		}
 	}
 
