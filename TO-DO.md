@@ -11,6 +11,7 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
 - [x] **Graceful Shutdown & Cleanup:** Limpieza automática de reglas y rutas al detener el servicio (evita "basura" en el Kernel).
 - [x] **Config Hot-Reload Atómico:** Validación de seguridad antes de recargar configuración con `SIGHUP` (Implementado con *Dry-Run*).
 - [x] **Kernel Route Rehydration:** (CRÍTICO) Restauración automática de `Host Routes` (/32) y tablas dedicadas tras recuperación de interfaz (Fix `ResetInterface`).
+- [x] **SLA Latency Enforcement:** Lógica de exclusión de rutas basada en umbral `max_latency` (SLA Awareness).
 
 ### 🟠 Fase 2: Observabilidad & Operaciones (Visibilidad)
 - [x] **Status Dump File (`/run/gobalancer/status.json`):** Exportación de estado en tiempo real para integraciones.
@@ -40,9 +41,9 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
     - [ ] *Objetivo:* Manejar miles de reglas (listas de bloqueo/VPN) sin matar la CPU (O(1) vs O(N)).
     - [ ] *Implementación:* Integrar `ipset` nativo y lectura de archivos `.txt` externos en `config.toml`.
     - [ ] **⚠️ RECORDATORIO:** Actualizar README con la sintaxis de `[[ipsets]]` y archivos externos.
-- [ ] **Decision Traceability (Logic Audit):**
-    - [ ] *Objetivo:* "Saber el recorrido de la aplicación".
-    - [ ] *Implementación:* Añadir un modo `--trace` que loguee la "Matriz de Decisión": por qué se eligió ruta A sobre ruta B (ej: "Ruta A descartada por SLA > 150ms").
+- [ ] **Wizard V2 Update:** (DEUDA TÉCNICA)
+    - [ ] *Objetivo:* Que el `gobalancer-wizard` soporte las nuevas funcionalidades (SLA y listas IPSet).
+    - [ ] *Estado Actual:* Solo genera configs básicas.
 
 ### 🔵 Fase 4: Calidad de Red (QoS & Tuning)
 *Mejorar la experiencia de usuario, no solo la conectividad.*
