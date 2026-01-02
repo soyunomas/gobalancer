@@ -51,6 +51,9 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
 - [x] **Sticky Sessions (Hash Policy):**
     - [x] *Problema:* Bancos y HTTPS cierran sesión si la IP pública cambia en cada petición.
     - [x] *Solución:* Configurar `fib_multipath_hash_policy` del Kernel a L4 (Flujo) para garantizar persistencia de sesión.
+- [ ] **Configurable Kernel Tuning (Sysctl):** (NUEVO - Prioridad OpenWrt)
+    - [ ] *Problema:* El código actual fuerza "BBR" hardcodeado, causando errores en routers sin el módulo `kmod-tcp-bbr`.
+    - [ ] *Solución:* Implementar sección `[tuning]` en `config.toml` para elegir manualmente `tcp_congestion_control` (ej: cubic, bbr, reno) y `tcp_worker_qdisc` (ej: fq, cake).
 - [ ] **Smart QoS (Anti-Bufferbloat):**
     - [ ] *Problema:* Descargar un archivo satura el enlace y el ping sube a 500ms.
     - [ ] *Solución:* Orquestar `tc` (Traffic Control) para activar algoritmos **CAKE** o **FQ_CODEL** en las WANs automáticamente.
