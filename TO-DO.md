@@ -25,7 +25,7 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
 ## 🚀 Roadmap Activo (Próximos Pasos)
 
 ### 🟡 Fase 3: Robustez y Trazabilidad (Prioridad Alta)
-*Objetivo: Que la aplicación "hable" claro sobre sus decisiones y soporte entornos hostiles (DHCP).*
+*Objetivo: Que la aplicación "hable" claro sobre sus decisiones y soporte entornos hostiles (DHCP/Carga).*
 
 - [x] **Dynamic Gateway Discovery (DHCP Support):**
     - [x] *Problema:* Gateways estáticos en `config.toml` rompen si el ISP cambia la IP (muy común en 4G/Starlink).
@@ -36,6 +36,10 @@ Este documento define la ruta crítica para estabilizar, optimizar y expandir la
 - [ ] **Runtime Profiling (pprof):** (NEXT TARGET 🎯)
     - [ ] *Objetivo:* Detectar fugas de memoria y cuellos de botella en CPU antes de escalar.
     - [ ] *Implementación:* Exponer servidor HTTP opcional en `localhost:6060/debug/pprof` para ver en tiempo real dónde gasta recursos la aplicación (flamegraphs).
+- [ ] **Scalable PBR (IPSet Support):** (NUEVO)
+    - [ ] *Objetivo:* Manejar miles de reglas (listas de bloqueo/VPN) sin matar la CPU (O(1) vs O(N)).
+    - [ ] *Implementación:* Integrar `ipset` nativo y lectura de archivos `.txt` externos en `config.toml`.
+    - [ ] **⚠️ RECORDATORIO:** Actualizar README con la sintaxis de `[[ipsets]]` y archivos externos.
 - [ ] **Decision Traceability (Logic Audit):**
     - [ ] *Objetivo:* "Saber el recorrido de la aplicación".
     - [ ] *Implementación:* Añadir un modo `--trace` que loguee la "Matriz de Decisión": por qué se eligió ruta A sobre ruta B (ej: "Ruta A descartada por SLA > 150ms").
